@@ -1,0 +1,30 @@
+[package]
+name = "message-store-qualification"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Deterministic real-PostgreSQL qualification for message-store correctness"
+
+[dependencies]
+anyhow.workspace = true
+cell-application.workspace = true
+cell-migrations.workspace = true
+cell-postgres.workspace = true
+message-codec-json.workspace = true
+message-domain.workspace = true
+platform-migrations.workspace = true
+platform-postgres.workspace = true
+postgres-message-store.workspace = true
+postgres-runtime.workspace = true
+secret-resolution.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tenancy-domain.workspace = true
+time.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

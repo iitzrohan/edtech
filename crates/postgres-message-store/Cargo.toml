@@ -1,18 +1,17 @@
 [package]
-name = "platform-postgres"
+name = "postgres-message-store"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
+description = "Reusable fixed-namespace PostgreSQL outbox and inbox mechanics"
 
 [dependencies]
 message-domain.workspace = true
-postgres-message-store.workspace = true
-postgres-runtime.workspace = true
 sqlx.workspace = true
-thiserror.workspace = true
-tracing.workspace = true
+time.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

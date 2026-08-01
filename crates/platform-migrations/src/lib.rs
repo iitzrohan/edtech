@@ -16,8 +16,11 @@ use thiserror::Error;
 
 const MIGRATION_ROLE: &str = "edtech_platform_migrator";
 const MIGRATION_ADVISORY_LOCK: i64 = 7_202_000_001;
-const MIGRATION_FILES: &[&str] = &["0001_platform_foundation.sql"];
-const SUPPORTED_CONTRACT_VERSION: u32 = 1;
+const MIGRATION_FILES: &[&str] = &[
+    "0001_platform_foundation.sql",
+    "0002_platform_message_store.sql",
+];
+const SUPPORTED_CONTRACT_VERSION: u32 = 2;
 
 /// Safe summary of a completed Platform migration run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

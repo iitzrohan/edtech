@@ -45,9 +45,10 @@ async fn main() -> Result<()> {
     if matches!(mode, Mode::CheckDatabase) {
         let check = check_database(&credential, &provider_config, PlatformRuntimeRole::Api).await?;
         println!(
-            "database valid: authority=platform server_version={} contract_version={}",
+            "database valid: service={service} authority=platform server_version={} contract_version={} message_store_available={}",
             check.server_version(),
-            check.contract_version()
+            check.contract_version(),
+            check.message_store_available()
         );
         return Ok(());
     }

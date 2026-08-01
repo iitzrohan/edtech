@@ -1,0 +1,398 @@
+{
+  "schema_version": 1,
+  "checkpoint": "03-message-contract-and-transactional-store",
+  "profile": "full",
+  "parameters": {
+    "tenants": 500,
+    "outbound_messages_per_authority": 20000,
+    "total_outbound_messages": 40000,
+    "concurrent_claimers_per_authority": 32,
+    "claim_batch_size": 100,
+    "inbox_delivery_attempts_per_authority": 20000,
+    "unique_inbox_messages_per_authority": 10000,
+    "duplicate_ratio_percent": 50,
+    "deliberate_lease_expiry_cases_per_authority": 100,
+    "cross_authority_command_event_pairs": 5000,
+    "encoded_payload_target_bytes": 256
+  },
+  "rust_version": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "sqlx_version": "0.9.0",
+  "postgres_server_version_num": 180004,
+  "postgres_image": "postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+  "host_os": "macos",
+  "cpu_architecture": "aarch64",
+  "available_parallelism": 10,
+  "contract_fixture_count": 2,
+  "correctness_passed": 73,
+  "correctness_failed": 0,
+  "checks": [
+    {
+      "name": "migration.concurrent_platform_migrators_serialize_and_rerun_idempotently",
+      "passed": true
+    },
+    {
+      "name": "migration.concurrent_cell_migrators_serialize_and_rerun_idempotently",
+      "passed": true
+    },
+    {
+      "name": "contract.platform_version_one_connects_without_message_capability",
+      "passed": true
+    },
+    {
+      "name": "contract.platform_version_one_message_store_is_unavailable",
+      "passed": true
+    },
+    {
+      "name": "contract.platform_version_three_fails_closed",
+      "passed": true
+    },
+    {
+      "name": "contract.cell_version_one_connects_without_message_capability",
+      "passed": true
+    },
+    {
+      "name": "contract.cell_version_three_fails_closed",
+      "passed": true
+    },
+    {
+      "name": "migration.failing_transaction_leaves_no_partial_message_objects",
+      "passed": true
+    },
+    {
+      "name": "catalog.platform_tables_have_migrator_owner",
+      "passed": true
+    },
+    {
+      "name": "catalog.platform_public_has_no_table_grants",
+      "passed": true
+    },
+    {
+      "name": "catalog.platform_authority_has_no_cross_store",
+      "passed": true
+    },
+    {
+      "name": "catalog.platform_required_indexes_exist",
+      "passed": true
+    },
+    {
+      "name": "catalog.platform_has_no_orphan_delivery_rows",
+      "passed": true
+    },
+    {
+      "name": "catalog.platform_complete_message_schema_is_safe",
+      "passed": true
+    },
+    {
+      "name": "catalog.cell_tables_have_migrator_owner",
+      "passed": true
+    },
+    {
+      "name": "catalog.cell_public_has_no_table_grants",
+      "passed": true
+    },
+    {
+      "name": "catalog.cell_authority_has_no_cross_store",
+      "passed": true
+    },
+    {
+      "name": "catalog.cell_required_indexes_exist",
+      "passed": true
+    },
+    {
+      "name": "catalog.cell_has_no_orphan_delivery_rows",
+      "passed": true
+    },
+    {
+      "name": "catalog.cell_complete_message_schema_is_safe",
+      "passed": true
+    },
+    {
+      "name": "catalog.unsafe_fixture_public_select_rejected",
+      "passed": true
+    },
+    {
+      "name": "catalog.unsafe_fixture_api_delivery_update_rejected",
+      "passed": true
+    },
+    {
+      "name": "catalog.unsafe_fixture_worker_immutable_update_rejected",
+      "passed": true
+    },
+    {
+      "name": "catalog.unsafe_fixture_runtime_table_owner_rejected",
+      "passed": true
+    },
+    {
+      "name": "catalog.unsafe_fixture_missing_claim_index_rejected",
+      "passed": true
+    },
+    {
+      "name": "catalog.unsafe_fixture_missing_inbox_key_rejected",
+      "passed": true
+    },
+    {
+      "name": "catalog.unsafe_fixture_missing_envelope_bound_rejected",
+      "passed": true
+    },
+    {
+      "name": "catalog.unsafe_fixture_missing_epoch_bound_rejected",
+      "passed": true
+    },
+    {
+      "name": "catalog.unsafe_fixture_cascade_delete_rejected",
+      "passed": true
+    },
+    {
+      "name": "catalog.unsafe_fixture_public_message_table_rejected",
+      "passed": true
+    },
+    {
+      "name": "privilege.api_roles_cannot_update_or_claim_delivery_state",
+      "passed": true
+    },
+    {
+      "name": "privilege.api_roles_cannot_access_inbox_receipts",
+      "passed": true
+    },
+    {
+      "name": "simulation.platform_api_enqueues_command",
+      "passed": true
+    },
+    {
+      "name": "privilege.platform_api_cannot_claim_before_sql",
+      "passed": true
+    },
+    {
+      "name": "simulation.claim_returns_exact_envelope_bytes",
+      "passed": true
+    },
+    {
+      "name": "simulation.cell_receipt_and_derived_event_commit_atomically",
+      "passed": true
+    },
+    {
+      "name": "privilege.cell_api_can_idempotently_enqueue_but_cannot_claim",
+      "passed": true
+    },
+    {
+      "name": "simulation.expired_first_lease_is_stale",
+      "passed": true
+    },
+    {
+      "name": "simulation.reclaim_uses_new_lease_and_increments_attempt",
+      "passed": true
+    },
+    {
+      "name": "simulation.command_redelivery_is_suppressed",
+      "passed": true
+    },
+    {
+      "name": "simulation.current_platform_lease_marks_published",
+      "passed": true
+    },
+    {
+      "name": "simulation.platform_event_receipt_commits",
+      "passed": true
+    },
+    {
+      "name": "simulation.acknowledgment_loss_redelivery_is_suppressed",
+      "passed": true
+    },
+    {
+      "name": "simulation.same_identity_changed_bytes_is_conflict",
+      "passed": true
+    },
+    {
+      "name": "simulation.different_consumer_processes_same_event_once",
+      "passed": true
+    },
+    {
+      "name": "simulation.current_cell_lease_marks_published",
+      "passed": true
+    },
+    {
+      "name": "simulation.one_platform_command_remains",
+      "passed": true
+    },
+    {
+      "name": "cell_fencing.absent_tenant_rejected",
+      "passed": true
+    },
+    {
+      "name": "cell_fencing.absent_tenant_rejected.leaves_no_receipt",
+      "passed": true
+    },
+    {
+      "name": "cell_fencing.disabled_tenant_rejected",
+      "passed": true
+    },
+    {
+      "name": "cell_fencing.disabled_tenant_rejected.leaves_no_receipt",
+      "passed": true
+    },
+    {
+      "name": "cell_fencing.stale_epoch_rejected",
+      "passed": true
+    },
+    {
+      "name": "cell_fencing.stale_epoch_rejected.leaves_no_receipt",
+      "passed": true
+    },
+    {
+      "name": "cell_fencing.newer_unregistered_epoch_rejected",
+      "passed": true
+    },
+    {
+      "name": "cell_fencing.newer_unregistered_epoch_rejected.leaves_no_receipt",
+      "passed": true
+    },
+    {
+      "name": "cell_fencing.wrong_target_cell_rejected",
+      "passed": true
+    },
+    {
+      "name": "cell_fencing.wrong_target_cell_rejected.leaves_no_receipt",
+      "passed": true
+    },
+    {
+      "name": "cell_fencing.wrong_source_cell_rejected",
+      "passed": true
+    },
+    {
+      "name": "cell_atomicity.canary_and_outbox_commit_together_under_rls",
+      "passed": true
+    },
+    {
+      "name": "cell_atomicity.committed_canary_is_tenant_visible",
+      "passed": true
+    },
+    {
+      "name": "cell_atomicity.forced_failure_after_outbox_rolls_back_both_effects",
+      "passed": true
+    },
+    {
+      "name": "profile.exact_outbound_message_parameters",
+      "passed": true
+    },
+    {
+      "name": "outbox.committed_enqueue_creates_exact_message_and_delivery_rows",
+      "passed": true
+    },
+    {
+      "name": "outbox.identical_reenqueue_is_idempotent",
+      "passed": true
+    },
+    {
+      "name": "outbox.same_identity_changed_bytes_is_conflict",
+      "passed": true
+    },
+    {
+      "name": "outbox.rollback_removes_message_and_delivery_atomically",
+      "passed": true
+    },
+    {
+      "name": "outbox.expired_leases_are_reclaimed_with_new_fences",
+      "passed": true
+    },
+    {
+      "name": "outbox.stale_leases_cannot_publish_or_reschedule",
+      "passed": true
+    },
+    {
+      "name": "outbox.concurrent_claimers_have_no_active_lease_overlap",
+      "passed": true
+    },
+    {
+      "name": "outbox.every_message_remains_accounted_for",
+      "passed": true
+    },
+    {
+      "name": "inbox.profile_uses_exact_attempt_and_duplicate_ratio",
+      "passed": true
+    },
+    {
+      "name": "inbox.concurrent_identical_deliveries_create_one_receipt",
+      "passed": true
+    },
+    {
+      "name": "direct_transfer.profile_exact_typed_pairs_decode",
+      "passed": true
+    }
+  ],
+  "platform": {
+    "authority": "platform",
+    "message_count": 20000,
+    "delivery_row_count": 20000,
+    "inbox_receipt_count": 10003,
+    "database_size_delta_bytes": 41238528,
+    "outbox_message_table_bytes": 23535616,
+    "outbox_delivery_table_bytes": 5464064,
+    "inbox_receipt_table_bytes": 7454720,
+    "relevant_index_bytes": 4751360,
+    "enqueue_per_second": 11272,
+    "idempotent_duplicate_enqueue_per_second": 8746,
+    "claim_per_second": 912,
+    "mark_published_per_second": 726,
+    "reschedule_per_second": 3214,
+    "inbox_insert_per_second": 2865,
+    "duplicate_inbox_per_second": 1381,
+    "claim_latency_p50_microseconds": 94974,
+    "claim_latency_p95_microseconds": 205745,
+    "claim_latency_p99_microseconds": 223519,
+    "inbox_latency_p50_microseconds": 605,
+    "inbox_latency_p95_microseconds": 770,
+    "inbox_latency_p99_microseconds": 976,
+    "maximum_observed_active_lease_overlap": 0,
+    "message_identity_conflicts_detected": 1,
+    "expired_leases_reclaimed": 100,
+    "stale_lease_operations_rejected": 2,
+    "duplicate_deliveries_suppressed": 10000,
+    "derived_duplicate_effects": 0,
+    "pending_count_after_completion": 0,
+    "leased_count_after_completion": 0,
+    "published_count_after_completion": 20000
+  },
+  "cell": {
+    "authority": "cell",
+    "message_count": 20000,
+    "delivery_row_count": 20000,
+    "inbox_receipt_count": 10001,
+    "database_size_delta_bytes": 39395328,
+    "outbox_message_table_bytes": 18317312,
+    "outbox_delivery_table_bytes": 6144000,
+    "inbox_receipt_table_bytes": 10248192,
+    "relevant_index_bytes": 4653056,
+    "enqueue_per_second": 11130,
+    "idempotent_duplicate_enqueue_per_second": 9027,
+    "claim_per_second": 935,
+    "mark_published_per_second": 670,
+    "reschedule_per_second": 3195,
+    "inbox_insert_per_second": 2668,
+    "duplicate_inbox_per_second": 1373,
+    "claim_latency_p50_microseconds": 67931,
+    "claim_latency_p95_microseconds": 240089,
+    "claim_latency_p99_microseconds": 256869,
+    "inbox_latency_p50_microseconds": 614,
+    "inbox_latency_p95_microseconds": 776,
+    "inbox_latency_p99_microseconds": 899,
+    "maximum_observed_active_lease_overlap": 0,
+    "message_identity_conflicts_detected": 1,
+    "expired_leases_reclaimed": 100,
+    "stale_lease_operations_rejected": 2,
+    "duplicate_deliveries_suppressed": 10000,
+    "derived_duplicate_effects": 0,
+    "pending_count_after_completion": 0,
+    "leased_count_after_completion": 0,
+    "published_count_after_completion": 20000
+  },
+  "direct_transfer": {
+    "pairs": 5000,
+    "throughput_per_second": 34743,
+    "command_receipts": 5000,
+    "event_receipts": 5000,
+    "duplicate_deliveries_suppressed": 10000,
+    "derived_duplicate_effects": 0
+  },
+  "cleanup_result": "disposable authority cleanup is enforced by the invoking xtask",
+  "timing_limitations": "Timings are machine-dependent observations, not pass thresholds or production capacity claims."
+}

@@ -1,11 +1,12 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "classes": {
     "domain": [
       "tenancy-domain",
       "provisioning-domain",
       "auth-context",
       "audit-domain"
+      ,"message-domain"
     ],
     "application": [
       "platform-application",
@@ -39,21 +40,36 @@
     "postgres_provider": [
       "postgres-runtime",
       "platform-postgres",
-      "cell-postgres"
+      "cell-postgres",
+      "postgres-message-store"
     ],
     "migration_adapter": [
       "platform-migrations",
       "cell-migrations"
     ],
     "qualification_tool": [
-      "postgres-qualification"
+      "postgres-qualification",
+      "message-store-qualification"
     ],
     "test_support": [
       "test-support"
     ],
     "tool": [
       "xtask",
-      "postgres-qualification"
+      "postgres-qualification",
+      "message-store-qualification"
+    ],
+    "message_domain": [
+      "message-domain"
+    ],
+    "contract_codec": [
+      "message-codec-json"
+    ],
+    "message_store_provider": [
+      "postgres-message-store"
+    ],
+    "message_qualification_tool": [
+      "message-store-qualification"
     ]
   },
   "forbidden_package_names": [
@@ -66,7 +82,12 @@
     "helpers",
     "misc",
     "infrastructure",
-    "adapters"
+    "adapters",
+    "messaging",
+    "events",
+    "contracts",
+    "bus",
+    "transport"
   ],
   "allowed_workspace_edges": [
     { "from": "provisioning-domain", "to": "tenancy-domain", "kinds": ["normal"] },
@@ -86,11 +107,19 @@
     { "from": "routing-application", "to": "auth-context", "kinds": ["normal"] },
 
     { "from": "runtime-config", "to": "tenancy-domain", "kinds": ["normal"] },
+    { "from": "message-domain", "to": "tenancy-domain", "kinds": ["normal"] },
+    { "from": "message-codec-json", "to": "message-domain", "kinds": ["normal"] },
+    { "from": "message-codec-json", "to": "tenancy-domain", "kinds": ["normal"] },
     { "from": "secret-resolution", "to": "runtime-config", "kinds": ["normal"] },
     { "from": "platform-postgres", "to": "postgres-runtime", "kinds": ["normal"] },
     { "from": "cell-postgres", "to": "postgres-runtime", "kinds": ["normal"] },
     { "from": "cell-postgres", "to": "tenancy-domain", "kinds": ["normal"] },
     { "from": "cell-postgres", "to": "cell-application", "kinds": ["normal"] },
+    { "from": "platform-postgres", "to": "message-domain", "kinds": ["normal"] },
+    { "from": "platform-postgres", "to": "postgres-message-store", "kinds": ["normal"] },
+    { "from": "cell-postgres", "to": "message-domain", "kinds": ["normal"] },
+    { "from": "cell-postgres", "to": "postgres-message-store", "kinds": ["normal"] },
+    { "from": "postgres-message-store", "to": "message-domain", "kinds": ["normal"] },
     { "from": "platform-migrations", "to": "postgres-runtime", "kinds": ["normal"] },
     { "from": "cell-migrations", "to": "postgres-runtime", "kinds": ["normal"] },
     { "from": "cell-migrations", "to": "tenancy-domain", "kinds": ["normal"] },
@@ -142,6 +171,17 @@
     { "from": "postgres-qualification", "to": "cell-migrations", "kinds": ["normal"] },
     { "from": "postgres-qualification", "to": "secret-resolution", "kinds": ["normal"] },
     { "from": "postgres-qualification", "to": "test-support", "kinds": ["normal"] },
+    { "from": "message-store-qualification", "to": "message-domain", "kinds": ["normal"] },
+    { "from": "message-store-qualification", "to": "message-codec-json", "kinds": ["normal"] },
+    { "from": "message-store-qualification", "to": "postgres-message-store", "kinds": ["normal"] },
+    { "from": "message-store-qualification", "to": "platform-postgres", "kinds": ["normal"] },
+    { "from": "message-store-qualification", "to": "cell-postgres", "kinds": ["normal"] },
+    { "from": "message-store-qualification", "to": "postgres-runtime", "kinds": ["normal"] },
+    { "from": "message-store-qualification", "to": "platform-migrations", "kinds": ["normal"] },
+    { "from": "message-store-qualification", "to": "cell-migrations", "kinds": ["normal"] },
+    { "from": "message-store-qualification", "to": "secret-resolution", "kinds": ["normal"] },
+    { "from": "message-store-qualification", "to": "tenancy-domain", "kinds": ["normal"] },
+    { "from": "message-store-qualification", "to": "cell-application", "kinds": ["normal"] },
 
     { "from": "tenancy-domain", "to": "test-support", "kinds": ["dev"] },
     { "from": "provisioning-domain", "to": "test-support", "kinds": ["dev"] },
@@ -158,6 +198,8 @@
     { "from": "cell-api", "to": "test-support", "kinds": ["dev"] },
     { "from": "cell-worker", "to": "test-support", "kinds": ["dev"] },
     { "from": "db-migrator", "to": "test-support", "kinds": ["dev"] }
+    ,{ "from": "message-domain", "to": "test-support", "kinds": ["dev"] }
+    ,{ "from": "message-codec-json", "to": "test-support", "kinds": ["dev"] }
   ],
   "allowed_external_dependencies": [
     { "from": "tenancy-domain", "dependency": "thiserror", "kinds": ["normal"] },
@@ -170,6 +212,13 @@
     { "from": "audit-domain", "dependency": "thiserror", "kinds": ["normal"] },
     { "from": "audit-domain", "dependency": "uuid", "kinds": ["normal"] },
     { "from": "cell-application", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "message-domain", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "message-domain", "dependency": "time", "kinds": ["normal"] },
+    { "from": "message-domain", "dependency": "uuid", "kinds": ["normal"] },
+    { "from": "message-codec-json", "dependency": "serde", "kinds": ["normal"] },
+    { "from": "message-codec-json", "dependency": "serde_json", "kinds": ["normal"] },
+    { "from": "message-codec-json", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "message-codec-json", "dependency": "time", "kinds": ["normal"] },
 
     { "from": "runtime-config", "dependency": "config", "kinds": ["normal"] },
     { "from": "runtime-config", "dependency": "serde", "kinds": ["normal"] },
@@ -193,6 +242,9 @@
     { "from": "cell-postgres", "dependency": "thiserror", "kinds": ["normal"] },
     { "from": "cell-postgres", "dependency": "tracing", "kinds": ["normal"] },
     { "from": "cell-postgres", "dependency": "uuid", "kinds": ["normal"] },
+    { "from": "postgres-message-store", "dependency": "sqlx", "kinds": ["normal"] },
+    { "from": "postgres-message-store", "dependency": "time", "kinds": ["normal"] },
+    { "from": "postgres-message-store", "dependency": "uuid", "kinds": ["normal"] },
     { "from": "platform-migrations", "dependency": "sqlx", "kinds": ["normal"] },
     { "from": "platform-migrations", "dependency": "secrecy", "kinds": ["normal"] },
     { "from": "platform-migrations", "dependency": "thiserror", "kinds": ["normal"] },
@@ -233,6 +285,12 @@
     { "from": "postgres-qualification", "dependency": "serde_json", "kinds": ["normal"] },
     { "from": "postgres-qualification", "dependency": "sqlx", "kinds": ["normal"] },
     { "from": "postgres-qualification", "dependency": "tokio", "kinds": ["normal"] },
+    { "from": "message-store-qualification", "dependency": "anyhow", "kinds": ["normal"] },
+    { "from": "message-store-qualification", "dependency": "serde", "kinds": ["normal"] },
+    { "from": "message-store-qualification", "dependency": "serde_json", "kinds": ["normal"] },
+    { "from": "message-store-qualification", "dependency": "sqlx", "kinds": ["normal"] },
+    { "from": "message-store-qualification", "dependency": "time", "kinds": ["normal"] },
+    { "from": "message-store-qualification", "dependency": "tokio", "kinds": ["normal"] },
 
     { "from": "xtask", "dependency": "anyhow", "kinds": ["normal"] },
     { "from": "xtask", "dependency": "clap", "kinds": ["normal"] },

@@ -18,6 +18,9 @@ Database, migration, role, policy, or tenant-table changes also require:
 cargo xtask verify-postgres --profile ci
 ```
 
+Message contract changes require `cargo xtask verify-contracts`. Message-store changes require
+both that command and `cargo xtask verify-postgres --profile ci`.
+
 ## Where code belongs
 
 - Domain invariants and provider-neutral value types belong in the narrowly named domain crate that
@@ -77,3 +80,21 @@ to prove removed implementation remains absent.
   A runtime role must not own the table or have schema CREATE/DDL capability.
 - Run `cargo xtask verify-postgres --profile ci` after every database change; the catalog inspector
   rejects unsafe tables, indexes, constraints, policies, owners, and privileges.
+
+## Message contracts and stores
+
+- Add a narrowly owned typed payload struct with unknown fields denied by default. Do not expose
+  provider SDK types or `serde_json::Value` in a domain/application API.
+- Use a validated lowercase `edtech.` name with at least four dot segments. Do not put a version in
+  the name; use `MessageSchemaVersion`.
+- An incompatible semantic change gets a new schema version and new fixture. Never edit a released
+  fixture, message name/version meaning, or envelope version in place.
+- Keep secrets, credentials, tokens, authorization headers, database URLs, large binaries, and
+  private object contents out of metadata and payloads. Never log payload or envelope bytes.
+- Outbox message bytes and inbox receipts are immutable. Runtime roles do not update or delete them.
+- Application code must not publish directly to a broker. Transport publication will belong behind
+  a qualified provider boundary in a later checkpoint.
+- Documentation must not claim exactly-once delivery or processing. Describe at-least-once behavior,
+  duplicate windows, database inbox suppression, and business idempotency separately.
+- Run `cargo xtask verify-contracts` after any contract, fixture, codec, or contract-documentation
+  change.

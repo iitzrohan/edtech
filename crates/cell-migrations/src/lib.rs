@@ -17,8 +17,8 @@ use thiserror::Error;
 
 const MIGRATION_ROLE: &str = "edtech_cell_migrator";
 const MIGRATION_ADVISORY_LOCK: i64 = 7_202_000_002;
-const MIGRATION_FILES: &[&str] = &["0001_cell_foundation.sql"];
-const SUPPORTED_CONTRACT_VERSION: u32 = 1;
+const MIGRATION_FILES: &[&str] = &["0001_cell_foundation.sql", "0002_cell_message_store.sql"];
+const SUPPORTED_CONTRACT_VERSION: u32 = 2;
 
 /// Safe summary of a completed Cell migration run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

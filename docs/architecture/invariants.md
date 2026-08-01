@@ -30,9 +30,12 @@ These rules apply to this foundation and every later checkpoint.
     authority.
 19. Every production tenant table belongs in `tenant_data` and must pass the forced-RLS schema
     inspector.
-20. No EdTech product feature is part of Checkpoint 2.
-21. Checkpoint 2 must not be represented as proof of production readiness, cloud network
-    isolation, messaging correctness, provider portability, high availability, disaster recovery,
+20. Message metadata and evidence contain no secrets, payload content, or envelope bytes.
+21. Commands target exactly one authority; events record committed facts and have no target.
+22. Outbox and inbox mechanics commit only with their authority-local database effects.
+23. No EdTech product feature is part of Checkpoint 3.
+24. Checkpoint 3 must not be represented as proof of production readiness, cloud network
+    isolation, network delivery, broker behavior, provider portability, high availability, disaster recovery,
     or protection against a completely compromised Cell runtime.
 
 Dependency and source boundaries are enforced by `cargo xtask verify-architecture`. Local database

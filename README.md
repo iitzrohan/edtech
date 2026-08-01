@@ -1,8 +1,8 @@
-# EdTech PostgreSQL foundation
+# EdTech message and PostgreSQL foundation
 
-This repository contains the Checkpoint 2 Rust/PostgreSQL foundation for a future multi-tenant,
-event-driven EdTech platform. It preserves the Checkpoint 1 domain, application, composition, and
-toolchain boundaries while adding separately privileged Platform and Cell PostgreSQL authorities.
+This repository contains the Checkpoint 3 Rust/PostgreSQL message foundation for a future
+multi-tenant, event-driven EdTech platform. It preserves Checkpoints 1 and 2 while adding a
+transport-neutral contract, transactional outboxes, and database-local inbox receipts.
 
 ## Platform and Cell authority
 
@@ -38,6 +38,24 @@ adapters, Cell binaries cannot import Platform adapters, and migration SQL exist
 migration crates. The permitted edges and source constraints are machine-enforced by
 `cargo xtask verify-architecture`.
 
+Message dependencies also point inward:
+
+```text
+application/domain -> message-domain -> message-codec-json -> exact bytes -> authority outbox
+```
+
+Commands request intent and target exactly one authority. Events record immutable facts committed
+by their source and have no target. Canonical envelope version 1 carries UUIDv7 identity,
+descriptor, microsecond UTC time, source, scope, target, correlation, causation, and a typed object
+payload. Tenant scope includes `TenantId`, `CellId`, and decimal-text assignment epoch.
+
+Each authority stores exact immutable bytes beside mutable delivery state. Worker claims use
+database time, `SKIP LOCKED`, and lease fencing. A published marker means only future transport
+acceptance, not consumption. A named inbox receipt suppresses exact duplicate delivery inside one
+database handler transaction; it does not prove exactly-once business processing.
+
+No broker, network delivery, publisher loop, or consumer loop exists yet.
+
 ## Local commands
 
 The repository pins Rust 1.97.1, SQLx 0.9.0, and PostgreSQL 18.4.
@@ -45,10 +63,13 @@ The repository pins Rust 1.97.1, SQLx 0.9.0, and PostgreSQL 18.4.
 ```console
 cargo xtask doctor
 cargo xtask verify
+cargo xtask verify-contracts
 cargo xtask doctor-postgres
 cargo xtask postgres-up
 cargo xtask migrate-local
 cargo xtask verify-postgres --profile ci
+cargo xtask verify-message-store --profile ci
+cargo xtask qualify-message-store --profile full --output docs/evidence/checkpoint-03 --replace
 cargo xtask qualify-tenancy --profile full --output docs/evidence/checkpoint-02 --replace
 cargo xtask postgres-down
 cargo xtask verify-all
@@ -79,12 +100,14 @@ performs bounded server, role, authority-marker, and schema-contract checks.
 
 ## Current claims and limitations
 
-Checkpoint 2 proves the behavior recorded in
-`docs/checkpoints/02-postgresql-authority-and-tenancy.md` and the generated qualification evidence.
-It covers local physical authority separation, PostgreSQL 18.4 and SQLx 0.9.0 compatibility,
-credential/role separation, migration behavior, forced-RLS isolation, exact assignment fencing,
-pool/prepared-query reuse, and current tenant-schema inspection.
+Checkpoint 3 proves only the tested behavior recorded in
+`docs/checkpoints/03-message-contract-and-transactional-store.md` and its qualification evidence.
+That includes canonical typed envelopes, exact-byte persistence, transactional outbox/inbox
+behavior, lease fencing, assignment checks, canary atomicity, and direct broker-free transfer under
+the tested profiles. Existing physical authority, role, migration, RLS, and schema-inspection
+proofs remain green.
 
 It does not establish cloud network isolation, Kubernetes secret delivery, production hardening,
-availability, backup/restore, disaster recovery, event delivery, provisioning, routing, identity,
-product correctness, provider portability, or production readiness.
+availability, backup/restore, disaster recovery, network or broker delivery, publisher/consumer
+behavior, global ordering, business-operation idempotency, retention/replay, provisioning, routing,
+identity, product correctness, provider portability, production capacity, or production readiness.

@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.edtech.invalid/message-envelope-v1.schema.json",
+  "title": "EdTech canonical message envelope version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelope_version",
+    "message_id",
+    "message_kind",
+    "message_name",
+    "message_schema_version",
+    "emitted_at",
+    "source",
+    "scope",
+    "target",
+    "correlation_id",
+    "causation_id",
+    "payload"
+  ],
+  "properties": {
+    "envelope_version": { "const": 1 },
+    "message_id": { "type": "string", "format": "uuid" },
+    "message_kind": { "enum": ["command", "event"] },
+    "message_name": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 160,
+      "pattern": "^edtech\\.[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*){2,}$"
+    },
+    "message_schema_version": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "emitted_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{6}Z$"
+    },
+    "source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "platform" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "cell_id"],
+          "properties": {
+            "kind": { "const": "cell" },
+            "cell_id": { "$ref": "#/$defs/cell_id" }
+          }
+        }
+      ]
+    },
+    "scope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "platform" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "cell_id"],
+          "properties": {
+            "kind": { "const": "cell" },
+            "cell_id": { "$ref": "#/$defs/cell_id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "cell_id", "tenant_id", "assignment_epoch"],
+          "properties": {
+            "kind": { "const": "tenant" },
+            "cell_id": { "$ref": "#/$defs/cell_id" },
+            "tenant_id": { "type": "string", "format": "uuid" },
+            "assignment_epoch": {
+              "type": "string",
+              "pattern": "^(?:[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{7}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-5])$"
+            }
+          }
+        }
+      ]
+    },
+    "target": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "platform" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "cell_id"],
+          "properties": {
+            "kind": { "const": "cell" },
+            "cell_id": { "$ref": "#/$defs/cell_id" }
+          }
+        }
+      ]
+    },
+    "correlation_id": { "type": "string", "format": "uuid" },
+    "causation_id": { "type": ["string", "null"], "format": "uuid" },
+    "payload": { "type": "object" }
+  },
+  "$defs": {
+    "cell_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 63,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "message_kind": { "const": "command" } } },
+      "then": { "properties": { "target": { "not": { "type": "null" } } } },
+      "else": { "properties": { "target": { "type": "null" } } }
+    }
+  ]
+}

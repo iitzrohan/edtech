@@ -6,8 +6,7 @@ use anyhow::{Context, Result};
 use cell_migrations::CellMigrationErrorKind;
 use cell_postgres::{CellDatabaseErrorKind, CellRuntimeRole};
 use platform_migrations::PlatformMigrationErrorKind;
-use platform_postgres::PlatformRuntimeRole;
-use postgres_runtime::ProviderErrorKind;
+use platform_postgres::{PlatformDatabaseErrorKind, PlatformRuntimeRole};
 use sqlx::{Executor, PgPool};
 use tenancy_domain::CellId;
 
@@ -30,7 +29,7 @@ pub(crate) async fn run(credentials: &Credentials, checks: &mut CheckBook) -> Re
         "migration.platform.clean_and_repeat_idempotent",
         platform_repeat
             .as_ref()
-            .is_ok_and(|report| report.applied_count() == 1 && report.latest_version() == 1),
+            .is_ok_and(|report| report.applied_count() == 2 && report.latest_version() == 2),
     )?;
     let cell_repeat =
         cell_migrations::migrate(&credentials.cell_migrator, &cell_config, &cell_id).await;
@@ -38,7 +37,7 @@ pub(crate) async fn run(credentials: &Credentials, checks: &mut CheckBook) -> Re
         "migration.cell.clean_and_repeat_idempotent",
         cell_repeat
             .as_ref()
-            .is_ok_and(|report| report.applied_count() == 1 && report.latest_version() == 1),
+            .is_ok_and(|report| report.applied_count() == 2 && report.latest_version() == 2),
     )?;
 
     let (platform_first, platform_second) = tokio::join!(
@@ -110,7 +109,7 @@ pub(crate) async fn run(credentials: &Credentials, checks: &mut CheckBook) -> Re
         "authority.platform_migrator_rejected_by_runtime_adapter",
         platform_migrator_runtime
             .err()
-            .is_some_and(|error| error.kind() == ProviderErrorKind::PrivilegeMismatch),
+            .is_some_and(|error| error.kind() == PlatformDatabaseErrorKind::PrivilegeMismatch),
     )?;
     let cell_migrator_runtime = cell_postgres::check_database(
         &credentials.cell_migrator,

@@ -8,6 +8,12 @@
 use std::{fmt, str::FromStr};
 
 use cell_application::TenantExecutionScope;
+use message_domain::{EncodedMessage, MessageAuthority, MessageKind, MessageScope, MessageTarget};
+use postgres_message_store::{
+    ClaimBatchSize, ClaimedMessage, ConsumerName, EnqueueOutcome, FailureCategory,
+    InboxReceiptOutcome, LeaseDuration, MessageStoreError, MessageStoreNamespace, OutboxLeaseId,
+    PublishMarkOutcome, PublisherInstanceId, RescheduleOutcome, RetryDelay,
+};
 use postgres_runtime::{
     DatabaseCredential, PostgresConnectionConfig, PostgresPool, ProviderError, ProviderErrorKind,
     connect, verify_runtime_role, verify_server_version,
@@ -17,10 +23,12 @@ use tenancy_domain::{AssignmentEpoch, CellId};
 use uuid::Uuid;
 
 const MIGRATION_ROLE: &str = "edtech_cell_migrator";
-const SUPPORTED_CONTRACT_VERSION: u32 = 1;
+const MIN_SUPPORTED_CONTRACT_VERSION: u32 = 1;
+const MAX_SUPPORTED_CONTRACT_VERSION: u32 = 2;
 const MAX_CANARY_PAYLOAD_CHARACTERS: usize = 4_096;
 const CELL_SCHEMAS: &[&str] = &[
     "cell_control",
+    "cell_messaging",
     "edtech_bootstrap",
     "edtech_internal",
     "edtech_migrations",
@@ -151,6 +159,12 @@ impl CellDatabaseCheck {
     pub const fn cell_id(&self) -> &CellId {
         &self.cell_id
     }
+
+    /// Reports whether schema-contract version 2 message-store operations are available.
+    #[must_use]
+    pub const fn message_store_available(&self) -> bool {
+        self.contract_version >= 2
+    }
 }
 
 /// Stable safe Cell database error categories.
@@ -164,6 +178,18 @@ pub enum CellDatabaseErrorKind {
     PrivilegeMismatch,
     /// The Cell schema contract is absent or incompatible.
     ContractMismatch,
+    /// Message-store operations require schema-contract version 2.
+    MessageStoreCapabilityUnavailable,
+    /// The connected runtime role cannot perform the operation.
+    RoleCapabilityMismatch,
+    /// An outbound message is not sourced and scoped by this Cell.
+    InvalidOutboundAuthority,
+    /// An inbound message does not target or scope to this Cell.
+    InvalidInboundTarget,
+    /// Reusable message-store mechanics failed.
+    MessageStoreFailure,
+    /// An inbox identity conflicts with immutable stored content.
+    InboxConflict,
     /// The execution scope names another logical Cell.
     WrongCell,
     /// The tenant has no local authority record.
@@ -189,6 +215,12 @@ impl CellDatabaseErrorKind {
             Self::AuthorityMismatch => "authority_mismatch",
             Self::PrivilegeMismatch => "privilege_mismatch",
             Self::ContractMismatch => "schema_contract_mismatch",
+            Self::MessageStoreCapabilityUnavailable => "message_store_capability_unavailable",
+            Self::RoleCapabilityMismatch => "role_capability_mismatch",
+            Self::InvalidOutboundAuthority => "invalid_outbound_authority",
+            Self::InvalidInboundTarget => "invalid_inbound_target",
+            Self::MessageStoreFailure => "message_store_failure",
+            Self::InboxConflict => "inbox_conflict",
             Self::WrongCell => "wrong_cell",
             Self::TenantAbsent => "tenant_absent",
             Self::TenantDisabled => "tenant_disabled",
@@ -247,12 +279,28 @@ impl From<ProviderError> for CellDatabaseError {
     }
 }
 
+impl From<MessageStoreError> for CellDatabaseError {
+    fn from(_error: MessageStoreError) -> Self {
+        Self::new(CellDatabaseErrorKind::MessageStoreFailure)
+    }
+}
+
+/// Result of atomically recording Cell inbound work and optional derived output.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CellInboxOutcome {
+    /// The named handler committed its first local receipt and optional output.
+    Inserted,
+    /// An exact redelivery was suppressed and produced no second output.
+    Duplicate,
+}
+
 /// Opaque, verified Cell runtime database handle.
 #[derive(Clone)]
 pub struct CellDatabase {
     pool: PostgresPool,
     cell_id: CellId,
     check: CellDatabaseCheck,
+    role: CellRuntimeRole,
 }
 
 impl fmt::Debug for CellDatabase {
@@ -290,6 +338,7 @@ impl CellDatabase {
                 pool,
                 cell_id: cell_id.clone(),
                 check,
+                role,
             }),
             Err(error) => {
                 pool.close().await;
@@ -302,6 +351,350 @@ impl CellDatabase {
     #[must_use]
     pub const fn check(&self) -> &CellDatabaseCheck {
         &self.check
+    }
+
+    /// Enqueues one Cell-sourced message, validating any tenant fence in the same transaction.
+    ///
+    /// # Errors
+    ///
+    /// Rejects contract 1, wrong Cell authority/scope, stale tenant fences, and store failures.
+    pub async fn enqueue_outbound_message(
+        &self,
+        message: &EncodedMessage,
+    ) -> Result<EnqueueOutcome, CellDatabaseError> {
+        self.require_message_store()?;
+        self.validate_cell_outbound(message)?;
+        match message.metadata().scope() {
+            MessageScope::Tenant {
+                tenant_id,
+                cell_id,
+                assignment_epoch,
+            } => {
+                let scope =
+                    TenantExecutionScope::new(*tenant_id, cell_id.clone(), *assignment_epoch);
+                let mut tenant = self.begin_tenant(&scope).await?;
+                let outcome = postgres_message_store::enqueue(
+                    &mut tenant.transaction,
+                    MessageStoreNamespace::Cell,
+                    message,
+                )
+                .await
+                .map_err(CellDatabaseError::from)?;
+                tenant
+                    .transaction
+                    .commit()
+                    .await
+                    .map_err(|_| CellDatabaseError::new(CellDatabaseErrorKind::Operation))?;
+                Ok(outcome)
+            }
+            MessageScope::Cell(_) => {
+                let mut transaction = self
+                    .pool
+                    .sqlx_pool()
+                    .begin()
+                    .await
+                    .map_err(|_| CellDatabaseError::new(CellDatabaseErrorKind::Operation))?;
+                let outcome = postgres_message_store::enqueue(
+                    &mut transaction,
+                    MessageStoreNamespace::Cell,
+                    message,
+                )
+                .await
+                .map_err(CellDatabaseError::from)?;
+                transaction
+                    .commit()
+                    .await
+                    .map_err(|_| CellDatabaseError::new(CellDatabaseErrorKind::Operation))?;
+                Ok(outcome)
+            }
+            MessageScope::Platform => Err(CellDatabaseError::new(
+                CellDatabaseErrorKind::InvalidOutboundAuthority,
+            )),
+        }
+    }
+
+    /// Atomically writes the operational isolation canary and a matching tenant outbox message.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid payload, wrong/mismatched scope, tenant authority, RLS, or store failures;
+    /// both effects commit or roll back together.
+    pub async fn write_isolation_canary_and_enqueue(
+        &self,
+        scope: &TenantExecutionScope,
+        canary_id: IsolationCanaryId,
+        payload: &str,
+        message: &EncodedMessage,
+    ) -> Result<EnqueueOutcome, CellDatabaseError> {
+        self.require_message_store()?;
+        validate_payload(payload)?;
+        self.validate_cell_outbound(message)?;
+        if !message_scope_matches_execution(message.metadata().scope(), scope) {
+            return Err(CellDatabaseError::new(
+                CellDatabaseErrorKind::InvalidOutboundAuthority,
+            ));
+        }
+        let mut tenant = self.begin_tenant(scope).await?;
+        sqlx::query(
+            "INSERT INTO tenant_data.isolation_canary (tenant_id, canary_id, payload) \
+             VALUES ($1, $2, $3)",
+        )
+        .bind(tenant.tenant_id)
+        .bind(*canary_id.as_uuid())
+        .bind(payload)
+        .execute(&mut *tenant.transaction)
+        .await
+        .map_err(|_| CellDatabaseError::new(CellDatabaseErrorKind::Operation))?;
+        let outcome = postgres_message_store::enqueue(
+            &mut tenant.transaction,
+            MessageStoreNamespace::Cell,
+            message,
+        )
+        .await
+        .map_err(CellDatabaseError::from)?;
+        tenant
+            .transaction
+            .commit()
+            .await
+            .map_err(|_| CellDatabaseError::new(CellDatabaseErrorKind::Operation))?;
+        Ok(outcome)
+    }
+
+    /// Claims an eligible Cell outbox batch for the worker role.
+    ///
+    /// # Errors
+    ///
+    /// Rejects API roles before SQL and returns safe store failures.
+    pub async fn claim_outbox_batch(
+        &self,
+        batch_size: ClaimBatchSize,
+        publisher: PublisherInstanceId,
+        lease_id: OutboxLeaseId,
+        lease_duration: LeaseDuration,
+    ) -> Result<Vec<ClaimedMessage>, CellDatabaseError> {
+        self.require_worker()?;
+        self.require_message_store()?;
+        let mut transaction = self
+            .pool
+            .sqlx_pool()
+            .begin()
+            .await
+            .map_err(|_| CellDatabaseError::new(CellDatabaseErrorKind::Operation))?;
+        let claimed = postgres_message_store::claim_batch(
+            &mut transaction,
+            MessageStoreNamespace::Cell,
+            batch_size,
+            publisher,
+            lease_id,
+            lease_duration,
+        )
+        .await
+        .map_err(CellDatabaseError::from)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| CellDatabaseError::new(CellDatabaseErrorKind::Operation))?;
+        Ok(claimed)
+    }
+
+    /// Marks future transport acceptance under an active Cell outbox lease.
+    ///
+    /// # Errors
+    ///
+    /// Rejects API roles, contract 1, and safe store failures.
+    pub async fn mark_outbox_published(
+        &self,
+        message_id: message_domain::MessageId,
+        lease_id: OutboxLeaseId,
+    ) -> Result<PublishMarkOutcome, CellDatabaseError> {
+        self.require_worker()?;
+        self.require_message_store()?;
+        let mut transaction = self
+            .pool
+            .sqlx_pool()
+            .begin()
+            .await
+            .map_err(operation_error)?;
+        let outcome = postgres_message_store::mark_published(
+            &mut transaction,
+            MessageStoreNamespace::Cell,
+            message_id,
+            lease_id,
+        )
+        .await
+        .map_err(CellDatabaseError::from)?;
+        transaction.commit().await.map_err(operation_error)?;
+        Ok(outcome)
+    }
+
+    /// Reschedules a Cell outbox row under an active lease.
+    ///
+    /// # Errors
+    ///
+    /// Rejects API roles, contract 1, and safe store failures.
+    pub async fn reschedule_outbox_message(
+        &self,
+        message_id: message_domain::MessageId,
+        lease_id: OutboxLeaseId,
+        retry_delay: RetryDelay,
+        failure_category: Option<&FailureCategory>,
+    ) -> Result<RescheduleOutcome, CellDatabaseError> {
+        self.require_worker()?;
+        self.require_message_store()?;
+        let mut transaction = self
+            .pool
+            .sqlx_pool()
+            .begin()
+            .await
+            .map_err(operation_error)?;
+        let outcome = postgres_message_store::reschedule(
+            &mut transaction,
+            MessageStoreNamespace::Cell,
+            message_id,
+            lease_id,
+            retry_delay,
+            failure_category,
+        )
+        .await
+        .map_err(CellDatabaseError::from)?;
+        transaction.commit().await.map_err(operation_error)?;
+        Ok(outcome)
+    }
+
+    /// Atomically records one worker inbox receipt and optional Cell-sourced output.
+    ///
+    /// # Errors
+    ///
+    /// Rejects wrong targets/scopes, tenant fences, roles, conflicts, and store failures.
+    pub async fn record_inbox_and_enqueue(
+        &self,
+        consumer: &ConsumerName,
+        inbound: &EncodedMessage,
+        derived: Option<&EncodedMessage>,
+    ) -> Result<CellInboxOutcome, CellDatabaseError> {
+        self.require_worker()?;
+        self.require_message_store()?;
+        self.validate_cell_inbound(inbound)?;
+        if let Some(message) = derived {
+            self.validate_cell_outbound(message)?;
+        }
+        let mut transaction = self
+            .pool
+            .sqlx_pool()
+            .begin()
+            .await
+            .map_err(operation_error)?;
+        if let MessageScope::Tenant {
+            tenant_id,
+            cell_id,
+            assignment_epoch,
+        } = inbound.metadata().scope()
+        {
+            let scope = TenantExecutionScope::new(*tenant_id, cell_id.clone(), *assignment_epoch);
+            self.validate_tenant_in_transaction(&mut transaction, &scope)
+                .await?;
+        }
+        if let Some(message) = derived
+            && let MessageScope::Tenant {
+                tenant_id,
+                cell_id,
+                assignment_epoch,
+            } = message.metadata().scope()
+        {
+            let scope = TenantExecutionScope::new(*tenant_id, cell_id.clone(), *assignment_epoch);
+            self.validate_tenant_in_transaction(&mut transaction, &scope)
+                .await?;
+        }
+        let receipt = postgres_message_store::record_inbox(
+            &mut transaction,
+            MessageStoreNamespace::Cell,
+            consumer,
+            inbound,
+        )
+        .await
+        .map_err(CellDatabaseError::from)?;
+        let outcome = match receipt {
+            InboxReceiptOutcome::Inserted => {
+                if let Some(message) = derived {
+                    postgres_message_store::enqueue(
+                        &mut transaction,
+                        MessageStoreNamespace::Cell,
+                        message,
+                    )
+                    .await
+                    .map_err(CellDatabaseError::from)?;
+                }
+                CellInboxOutcome::Inserted
+            }
+            InboxReceiptOutcome::Duplicate => CellInboxOutcome::Duplicate,
+            InboxReceiptOutcome::Conflict => {
+                let _rollback_result = transaction.rollback().await;
+                return Err(CellDatabaseError::new(CellDatabaseErrorKind::InboxConflict));
+            }
+        };
+        transaction.commit().await.map_err(operation_error)?;
+        Ok(outcome)
+    }
+
+    fn require_message_store(&self) -> Result<(), CellDatabaseError> {
+        if self.check.message_store_available() {
+            Ok(())
+        } else {
+            Err(CellDatabaseError::new(
+                CellDatabaseErrorKind::MessageStoreCapabilityUnavailable,
+            ))
+        }
+    }
+
+    fn require_worker(&self) -> Result<(), CellDatabaseError> {
+        if self.role == CellRuntimeRole::Worker {
+            Ok(())
+        } else {
+            Err(CellDatabaseError::new(
+                CellDatabaseErrorKind::RoleCapabilityMismatch,
+            ))
+        }
+    }
+
+    fn validate_cell_outbound(&self, message: &EncodedMessage) -> Result<(), CellDatabaseError> {
+        let source_matches = matches!(
+            message.metadata().source(),
+            MessageAuthority::Cell(cell_id) if cell_id == &self.cell_id
+        );
+        let scope_matches = message
+            .metadata()
+            .scope()
+            .cell_id()
+            .is_some_and(|cell_id| cell_id == &self.cell_id);
+        if source_matches && scope_matches {
+            Ok(())
+        } else {
+            Err(CellDatabaseError::new(
+                CellDatabaseErrorKind::InvalidOutboundAuthority,
+            ))
+        }
+    }
+
+    fn validate_cell_inbound(&self, message: &EncodedMessage) -> Result<(), CellDatabaseError> {
+        let scope_matches = message
+            .metadata()
+            .scope()
+            .cell_id()
+            .is_some_and(|cell_id| cell_id == &self.cell_id);
+        let target_matches = match message.metadata().descriptor().kind() {
+            MessageKind::Command => matches!(
+                message.metadata().target(),
+                Some(MessageTarget::Cell(cell_id)) if cell_id == &self.cell_id
+            ),
+            MessageKind::Event => message.metadata().target().is_none(),
+        };
+        if scope_matches && target_matches {
+            Ok(())
+        } else {
+            Err(CellDatabaseError::new(
+                CellDatabaseErrorKind::InvalidInboundTarget,
+            ))
+        }
     }
 
     /// Writes one isolation-canary row within a validated tenant scope.
@@ -426,14 +819,30 @@ impl CellDatabase {
             return Err(CellDatabaseError::new(CellDatabaseErrorKind::WrongCell));
         }
         let tenant_id = *scope.tenant_id().as_uuid();
-        let tenant_text = tenant_id.to_string();
-        let epoch_text = assignment_epoch_to_database_text(scope.assignment_epoch());
         let mut transaction = self
             .pool
             .sqlx_pool()
             .begin()
             .await
             .map_err(|_| CellDatabaseError::new(CellDatabaseErrorKind::Operation))?;
+        self.validate_tenant_in_transaction(&mut transaction, scope)
+            .await?;
+        Ok(TenantTransaction {
+            transaction,
+            tenant_id,
+        })
+    }
+
+    async fn validate_tenant_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        scope: &TenantExecutionScope,
+    ) -> Result<(), CellDatabaseError> {
+        if scope.cell_id() != &self.cell_id {
+            return Err(CellDatabaseError::new(CellDatabaseErrorKind::WrongCell));
+        }
+        let tenant_text = scope.tenant_id().as_uuid().to_string();
+        let epoch_text = assignment_epoch_to_database_text(scope.assignment_epoch());
         let setup = sqlx::query(
             "SELECT pg_catalog.set_config('edtech.tenant_id', $1, true), \
              pg_catalog.set_config('edtech.assignment_epoch', $2, true), \
@@ -441,42 +850,26 @@ impl CellDatabase {
         )
         .bind(tenant_text)
         .bind(epoch_text)
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await;
         if setup.is_err() {
-            let _rollback_result = transaction.rollback().await;
             return Err(CellDatabaseError::new(CellDatabaseErrorKind::Operation));
         }
 
         let status =
             sqlx::query_scalar::<_, String>("SELECT edtech_internal.tenant_scope_status()")
-                .fetch_one(&mut *transaction)
+                .fetch_one(&mut **transaction)
                 .await;
         match status.as_deref() {
-            Ok("active") => Ok(TenantTransaction {
-                transaction,
-                tenant_id,
-            }),
-            Ok("absent") => {
-                let _rollback_result = transaction.rollback().await;
-                Err(CellDatabaseError::new(CellDatabaseErrorKind::TenantAbsent))
-            }
-            Ok("disabled") => {
-                let _rollback_result = transaction.rollback().await;
-                Err(CellDatabaseError::new(
-                    CellDatabaseErrorKind::TenantDisabled,
-                ))
-            }
-            Ok("stale") => {
-                let _rollback_result = transaction.rollback().await;
-                Err(CellDatabaseError::new(
-                    CellDatabaseErrorKind::StaleAssignmentEpoch,
-                ))
-            }
-            _ => {
-                let _rollback_result = transaction.rollback().await;
-                Err(CellDatabaseError::new(CellDatabaseErrorKind::Operation))
-            }
+            Ok("active") => Ok(()),
+            Ok("absent") => Err(CellDatabaseError::new(CellDatabaseErrorKind::TenantAbsent)),
+            Ok("disabled") => Err(CellDatabaseError::new(
+                CellDatabaseErrorKind::TenantDisabled,
+            )),
+            Ok("stale") => Err(CellDatabaseError::new(
+                CellDatabaseErrorKind::StaleAssignmentEpoch,
+            )),
+            _ => Err(CellDatabaseError::new(CellDatabaseErrorKind::Operation)),
         }
     }
 }
@@ -529,6 +922,26 @@ fn validate_payload(payload: &str) -> Result<(), CellDatabaseError> {
         ));
     }
     Ok(())
+}
+
+fn operation_error(_error: sqlx::Error) -> CellDatabaseError {
+    CellDatabaseError::new(CellDatabaseErrorKind::MessageStoreFailure)
+}
+
+fn message_scope_matches_execution(
+    message_scope: &MessageScope,
+    execution_scope: &TenantExecutionScope,
+) -> bool {
+    matches!(
+        message_scope,
+        MessageScope::Tenant {
+            tenant_id,
+            cell_id,
+            assignment_epoch,
+        } if *tenant_id == execution_scope.tenant_id()
+            && cell_id == execution_scope.cell_id()
+            && *assignment_epoch == execution_scope.assignment_epoch()
+    )
 }
 
 async fn verify_ready(
@@ -592,14 +1005,14 @@ async fn verify_contract(pool: &PostgresPool) -> Result<u32, CellDatabaseError> 
 }
 
 fn validate_contract(name: &str, version: i32) -> Result<u32, CellDatabaseError> {
-    if name != "cell" || version != 1 {
+    if name != "cell" {
         return Err(CellDatabaseError::new(
             CellDatabaseErrorKind::ContractMismatch,
         ));
     }
     let version = u32::try_from(version)
         .map_err(|_| CellDatabaseError::new(CellDatabaseErrorKind::ContractMismatch))?;
-    if version != SUPPORTED_CONTRACT_VERSION {
+    if !(MIN_SUPPORTED_CONTRACT_VERSION..=MAX_SUPPORTED_CONTRACT_VERSION).contains(&version) {
         return Err(CellDatabaseError::new(
             CellDatabaseErrorKind::ContractMismatch,
         ));
@@ -673,7 +1086,8 @@ mod tests {
     #[test]
     fn cell_contract_compatibility_fails_closed() {
         assert_eq!(validate_contract("cell", 1).ok(), Some(1));
-        for (name, version) in [("platform", 1), ("cell", 0), ("cell", 2)] {
+        assert_eq!(validate_contract("cell", 2).ok(), Some(2));
+        for (name, version) in [("platform", 1), ("cell", 0), ("cell", 3)] {
             assert_eq!(
                 validate_contract(name, version)
                     .err()

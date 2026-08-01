@@ -1,4 +1,4 @@
-//! Canonical, cross-platform repository workflows for Checkpoint 1.
+//! Canonical, cross-platform repository workflows through Checkpoint 3.
 //!
 //! `xtask` performs toolchain diagnostics, static architecture enforcement, configuration smoke
 //! checks, and the deterministic full verification sequence without external services.
@@ -34,6 +34,8 @@ enum RepositoryCommand {
     Doctor,
     /// Enforce workspace dependency and source-boundary rules.
     VerifyArchitecture,
+    /// Verify canonical message contracts and immutable fixtures without services.
+    VerifyContracts,
     /// Validate every process composition root with synthetic configuration.
     Smoke,
     /// Run the complete deterministic repository verification sequence.
@@ -70,8 +72,26 @@ enum RepositoryCommand {
         #[arg(long, value_enum, default_value_t = QualificationProfile::Ci)]
         profile: QualificationProfile,
     },
+    /// Qualify Checkpoint 3 message-store behavior in disposable `PostgreSQL` authorities.
+    VerifyMessageStore {
+        /// Deterministic qualification workload.
+        #[arg(long, value_enum, default_value_t = QualificationProfile::Ci)]
+        profile: QualificationProfile,
+    },
     /// Run tenancy qualification and write stable, credential-free evidence.
     QualifyTenancy {
+        /// Deterministic qualification workload.
+        #[arg(long, value_enum)]
+        profile: QualificationProfile,
+        /// Directory for JSON and Markdown evidence.
+        #[arg(long)]
+        output: PathBuf,
+        /// Permit replacement of existing qualification evidence.
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Run message-store qualification and write stable, credential-free evidence.
+    QualifyMessageStore {
         /// Deterministic qualification workload.
         #[arg(long, value_enum)]
         profile: QualificationProfile,
@@ -91,6 +111,7 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         RepositoryCommand::Doctor => doctor(&root),
         RepositoryCommand::VerifyArchitecture => verify_architecture(&root),
+        RepositoryCommand::VerifyContracts => verify_contracts(&root),
         RepositoryCommand::Smoke => smoke(&root),
         RepositoryCommand::Verify => verify(&root),
         RepositoryCommand::DoctorPostgres => postgres::doctor(&root),
@@ -102,11 +123,19 @@ fn main() -> Result<()> {
         RepositoryCommand::PostgresDown { project } => postgres::down(&root, &project),
         RepositoryCommand::MigrateLocal { project } => postgres::migrate_local(&root, &project),
         RepositoryCommand::VerifyPostgres { profile } => postgres::verify(&root, profile),
+        RepositoryCommand::VerifyMessageStore { profile } => {
+            postgres::verify_message_store(&root, profile)
+        }
         RepositoryCommand::QualifyTenancy {
             profile,
             output,
             replace,
         } => postgres::qualify(&root, profile, &output, replace),
+        RepositoryCommand::QualifyMessageStore {
+            profile,
+            output,
+            replace,
+        } => postgres::qualify_message_store(&root, profile, &output, replace),
         RepositoryCommand::VerifyAll => {
             verify(&root)?;
             postgres::verify(&root, QualificationProfile::Ci)
@@ -164,21 +193,34 @@ fn doctor(root: &Path) -> Result<()> {
         "crates/platform-migrations",
         "crates/cell-migrations",
         "crates/test-support",
+        "crates/message-domain",
+        "crates/message-codec-json",
+        "crates/postgres-message-store",
         "infra/local/postgres/compose.yml",
         "infra/local/postgres/platform/init/001-bootstrap.sh",
         "infra/local/postgres/cell/init/001-bootstrap.sh",
         "docs/adr/0001-workspace-foundation.md",
         "docs/adr/0002-postgresql-authority-and-tenancy.md",
+        "docs/adr/0003-message-contract-and-transactional-store.md",
         "docs/architecture/invariants.md",
         "docs/architecture/database-authorities.md",
         "docs/architecture/tenant-storage-rules.md",
+        "docs/architecture/message-contracts.md",
+        "docs/architecture/message-delivery-semantics.md",
         "docs/checkpoints/01-workspace-foundation.md",
         "docs/checkpoints/02-postgresql-authority-and-tenancy.md",
+        "docs/checkpoints/03-message-contract-and-transactional-store.md",
+        "docs/contracts/message-envelope-v1.md",
+        "docs/contracts/message-envelope-v1.schema.json",
+        "docs/contracts/fixtures/qualification-command-v1.json",
+        "docs/contracts/fixtures/qualification-event-v1.json",
         "docs/evidence/checkpoint-02/postgres-qualification.json",
         "docs/evidence/checkpoint-02/postgres-qualification.md",
         "docs/runbooks/local-postgres.md",
+        "docs/runbooks/message-store-qualification.md",
         "tools/xtask",
         "tools/postgres-qualification",
+        "tools/message-store-qualification",
         ".editorconfig",
         ".gitignore",
         "Cargo.lock",
@@ -219,6 +261,7 @@ fn doctor(root: &Path) -> Result<()> {
 
 fn verify(root: &Path) -> Result<()> {
     doctor(root)?;
+    verify_contracts(root)?;
     run_checked(
         root,
         "cargo fmt --all -- --check",
@@ -253,6 +296,143 @@ fn verify(root: &Path) -> Result<()> {
     )?;
     verify_architecture(root)?;
     smoke(root)
+}
+
+#[allow(clippy::too_many_lines)]
+fn verify_contracts(root: &Path) -> Result<()> {
+    run_checked(
+        root,
+        "cargo test --package message-domain --package message-codec-json --locked",
+        "cargo",
+        &[
+            "test",
+            "--package",
+            "message-domain",
+            "--package",
+            "message-codec-json",
+            "--locked",
+        ],
+    )?;
+    let schema_path = root.join("docs/contracts/message-envelope-v1.schema.json");
+    let schema = fs::read_to_string(&schema_path)
+        .with_context(|| format!("could not read {}", schema_path.display()))?;
+    let _: serde_json::Value = serde_json::from_str(&schema)
+        .with_context(|| format!("could not parse {}", schema_path.display()))?;
+
+    let fixture_directory = root.join("docs/contracts/fixtures");
+    let fixtures = [
+        (
+            "qualification-command-v1.json",
+            "\"message_kind\":\"command\"",
+        ),
+        ("qualification-event-v1.json", "\"message_kind\":\"event\""),
+    ];
+    let mut descriptors = BTreeSet::new();
+    for (file_name, kind_marker) in fixtures {
+        let path = fixture_directory.join(file_name);
+        let bytes =
+            fs::read(&path).with_context(|| format!("could not read {}", path.display()))?;
+        if !bytes.ends_with(b"\n") || bytes[..bytes.len().saturating_sub(1)].ends_with(b"\n") {
+            bail!("contract fixture `{file_name}` must end with exactly one LF");
+        }
+        if bytes.len().saturating_sub(1) > message_fixture_maximum_bytes() {
+            bail!("contract fixture `{file_name}` exceeds the envelope bound");
+        }
+        let text = std::str::from_utf8(&bytes)
+            .with_context(|| format!("contract fixture `{file_name}` is not UTF-8"))?;
+        let lowercase = text.to_ascii_lowercase();
+        for marker in [
+            "postgres://",
+            "postgresql://",
+            "password",
+            "bearer",
+            "authorization",
+            "private_key",
+            "secret-sentinel",
+        ] {
+            if lowercase.contains(marker) {
+                bail!("contract fixture `{file_name}` contains a forbidden credential marker");
+            }
+        }
+        if !text.contains(kind_marker)
+            || !text.contains("\"message_schema_version\":1")
+            || !text.contains("\"assignment_epoch\":\"")
+            || !file_name.ends_with("-v1.json")
+        {
+            bail!("contract fixture `{file_name}` does not match its descriptor filename");
+        }
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes[..bytes.len() - 1])
+            .with_context(|| format!("contract fixture `{file_name}` is invalid JSON"))?;
+        let name = parsed
+            .get("message_name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow!("contract fixture `{file_name}` lacks message_name"))?;
+        let version = parsed
+            .get("message_schema_version")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| anyhow!("contract fixture `{file_name}` lacks schema version"))?;
+        if !descriptors.insert((name.to_owned(), version)) {
+            bail!("contract fixture descriptors must be unique");
+        }
+    }
+    let documentation = [
+        "README.md",
+        "CONTRIBUTING.md",
+        "docs/architecture",
+        "docs/adr",
+        "docs/checkpoints",
+        "docs/contracts/message-envelope-v1.md",
+    ];
+    for relative in documentation {
+        let path = root.join(relative);
+        let mut files = Vec::new();
+        if path.is_dir() {
+            collect_source_files(&path, &mut files)?;
+        } else if path.exists() {
+            files.push(path);
+        }
+        for file in files {
+            let contents = fs::read_to_string(&file)
+                .with_context(|| format!("could not read {}", file.display()))?;
+            for (line_number, line) in contents.lines().enumerate() {
+                if exactly_once_claim(line) {
+                    bail!(
+                        "documentation `{}` line {} makes a forbidden exactly-once claim",
+                        relative_display(root, &file),
+                        line_number + 1
+                    );
+                }
+            }
+        }
+    }
+    println!("verify-contracts: 2 canonical fixtures and envelope schema passed");
+    Ok(())
+}
+
+const fn message_fixture_maximum_bytes() -> usize {
+    262_144
+}
+
+fn exactly_once_claim(line: &str) -> bool {
+    let normalized = line.to_ascii_lowercase();
+    if !normalized.contains("exactly-once") && !normalized.contains("exactly once") {
+        return false;
+    }
+    ![
+        "no exactly",
+        "not exactly",
+        "never exactly",
+        "does not prove exactly",
+        "without exactly",
+        "prohibition on exactly",
+        "forbid exactly",
+        "forbidden exactly",
+        "cannot claim exactly",
+        "must not claim exactly",
+        "present exactly once",
+    ]
+    .iter()
+    .any(|denial| normalized.contains(denial))
 }
 
 fn capture(root: &Path, program: &str, arguments: &[&str]) -> Result<String> {
@@ -316,6 +496,10 @@ struct RuleClasses {
     qualification_tool: BTreeSet<String>,
     test_support: BTreeSet<String>,
     tool: BTreeSet<String>,
+    message_domain: BTreeSet<String>,
+    contract_codec: BTreeSet<String>,
+    message_store_provider: BTreeSet<String>,
+    message_qualification_tool: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -404,7 +588,7 @@ fn read_rules(root: &Path) -> Result<DependencyRules> {
         fs::read_to_string(&path).with_context(|| format!("could not read {}", path.display()))?;
     let rules: DependencyRules = serde_json::from_str(&contents)
         .with_context(|| format!("could not parse {}", path.display()))?;
-    if rules.schema_version != 2 {
+    if rules.schema_version != 3 {
         bail!(
             "unsupported dependency-rule schema {}",
             rules.schema_version
@@ -602,7 +786,13 @@ fn validate_workspace_edge(
     if package.name == "tenant-router"
         && (rules.classes.secret_adapter.contains(&dependency.name)
             || rules.classes.postgres_provider.contains(&dependency.name)
-            || rules.classes.migration_adapter.contains(&dependency.name))
+            || rules.classes.migration_adapter.contains(&dependency.name)
+            || rules.classes.message_domain.contains(&dependency.name)
+            || rules.classes.contract_codec.contains(&dependency.name)
+            || rules
+                .classes
+                .message_store_provider
+                .contains(&dependency.name))
     {
         violations.push(format!(
             "tenant-router imports forbidden database package `{}`",
@@ -623,10 +813,21 @@ fn validate_workspace_edge(
             dependency.name
         ));
     }
+    if package.name == "postgres-message-store"
+        && matches!(
+            dependency.name.as_str(),
+            "platform-postgres" | "cell-postgres"
+        )
+    {
+        violations.push(format!(
+            "postgres-message-store imports authority-specific provider `{}`",
+            dependency.name
+        ));
+    }
     if rules.classes.migration_adapter.contains(&dependency.name)
         && !matches!(
             package.name.as_str(),
-            "db-migrator" | "postgres-qualification"
+            "db-migrator" | "postgres-qualification" | "message-store-qualification"
         )
     {
         violations.push(format!(
@@ -638,6 +839,34 @@ fn validate_workspace_edge(
         violations.push(format!(
             "qualification tool `{}` is imported by production package `{}`",
             dependency.name, package.name
+        ));
+    }
+    if (rules.classes.domain.contains(&package.name)
+        || rules.classes.application.contains(&package.name))
+        && (rules.classes.contract_codec.contains(&dependency.name)
+            || rules
+                .classes
+                .message_store_provider
+                .contains(&dependency.name))
+    {
+        violations.push(format!(
+            "domain/application crate `{}` imports forbidden message provider `{}`",
+            package.name, dependency.name
+        ));
+    }
+    if rules.classes.deployable_binary.contains(&package.name)
+        && (rules
+            .classes
+            .message_store_provider
+            .contains(&dependency.name)
+            || rules
+                .classes
+                .message_qualification_tool
+                .contains(&dependency.name))
+    {
+        violations.push(format!(
+            "deployable binary `{}` imports forbidden message-store package `{}`",
+            package.name, dependency.name
         ));
     }
     if (rules.classes.domain.contains(&package.name)
@@ -691,6 +920,34 @@ fn validate_external_edge(
         violations.push(format!(
             "domain crate `{}` must not depend on serde",
             package.name
+        ));
+    }
+    if rules.classes.message_domain.contains(&package.name)
+        && matches!(
+            dependency.name.as_str(),
+            "serde" | "serde_json" | "sqlx" | "tokio" | "tracing"
+        )
+    {
+        violations.push(format!(
+            "message-domain imports forbidden external dependency `{}`",
+            dependency.name
+        ));
+    }
+    if rules.classes.contract_codec.contains(&package.name)
+        && matches!(dependency.name.as_str(), "sqlx" | "tokio" | "tracing")
+    {
+        violations.push(format!(
+            "message-codec-json imports forbidden external dependency `{}`",
+            dependency.name
+        ));
+    }
+    if matches!(
+        dependency.name.as_str(),
+        "async-nats" | "rdkafka" | "lapin" | "pulsar"
+    ) {
+        violations.push(format!(
+            "package `{}` introduces forbidden broker dependency `{}`",
+            package.name, dependency.name
         ));
     }
     if (rules.classes.domain.contains(&package.name)
@@ -997,6 +1254,8 @@ fn source_violations(
 
     let approved_url_location = path.starts_with(root.join("infra/local/postgres"))
         || path.starts_with(root.join("tools/postgres-qualification"))
+        || path.starts_with(root.join("tools/message-store-qualification"))
+        || path.starts_with(root.join("tools/xtask"))
         || is_test_file;
     if !approved_url_location
         && (production.contains("postgres://") || production.contains("postgresql://"))
@@ -1061,7 +1320,40 @@ fn source_violations(
                     line_number + 1
                 ));
             }
+            let logging_line = [
+                "println!",
+                "eprintln!",
+                "tracing::",
+                "debug!",
+                "info!",
+                "warn!",
+                "error!",
+            ]
+            .iter()
+            .any(|marker| normalized.contains(marker));
+            if logging_line
+                && (normalized.contains("encodedmessage")
+                    || normalized.contains("encoded_message")
+                    || normalized.contains("payload_bytes")
+                    || normalized.contains("envelope_bytes"))
+            {
+                violations.push(format!(
+                    "non-test source `{relative}` line {} logs message or payload bytes",
+                    line_number + 1
+                ));
+            }
         }
+    }
+
+    if is_rust
+        && (path.starts_with(root.join("apps")) || path.starts_with(root.join("crates")))
+        && ["async_nats", "rdkafka", "lapin", "pulsar"]
+            .iter()
+            .any(|name| production.contains(name))
+    {
+        violations.push(format!(
+            "runtime source `{relative}` contains a forbidden broker SDK or provider name"
+        ));
     }
 
     if path.starts_with(root.join("apps")) && is_rust {
@@ -1071,6 +1363,7 @@ fn source_violations(
             "PgPool",
             "PgConnection",
             "sqlx::migrate::Migrator",
+            "postgres_message_store::",
         ] {
             if production.contains(token) {
                 violations.push(format!(
@@ -1104,6 +1397,16 @@ fn source_violations(
     {
         violations.push(format!(
             "source `{relative}` exposes a SQLx type outside the PostgreSQL provider layer"
+        ));
+    }
+    if is_rust
+        && package.is_some_and(|name| {
+            rules.classes.domain.contains(name) || rules.classes.application.contains(name)
+        })
+        && public_api_contains_json_value(production)
+    {
+        violations.push(format!(
+            "source `{relative}` exposes serde_json::Value from a domain/application API"
         ));
     }
 
@@ -1168,6 +1471,28 @@ fn public_api_contains_sqlx(contents: &str) -> bool {
             .collect::<Vec<_>>()
             .join(" ");
         if sqlx_tokens.iter().any(|token| signature.contains(token)) {
+            return true;
+        }
+    }
+    false
+}
+
+fn public_api_contains_json_value(contents: &str) -> bool {
+    let lines = contents.lines().collect::<Vec<_>>();
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        if !(trimmed.starts_with("pub fn ")
+            || trimmed.starts_with("pub async fn ")
+            || trimmed.starts_with("pub type ")
+            || trimmed.starts_with("pub trait ")
+            || trimmed.starts_with("pub struct ")
+            || trimmed.starts_with("pub enum "))
+        {
+            continue;
+        }
+        let end = usize::min(index + 6, lines.len());
+        let signature = lines[index..end].join(" ");
+        if signature.contains("serde_json::Value") {
             return true;
         }
     }
@@ -1319,7 +1644,7 @@ mod tests {
 
     fn rules() -> DependencyRules {
         DependencyRules {
-            schema_version: 2,
+            schema_version: 3,
             classes: RuleClasses {
                 domain: set(&["tenancy-domain"]),
                 application: set(&["platform-application", "cell-application"]),
@@ -1338,6 +1663,10 @@ mod tests {
                 qualification_tool: set(&["postgres-qualification"]),
                 test_support: set(&["test-support"]),
                 tool: BTreeSet::new(),
+                message_domain: BTreeSet::new(),
+                contract_codec: BTreeSet::new(),
+                message_store_provider: BTreeSet::new(),
+                message_qualification_tool: BTreeSet::new(),
             },
             forbidden_package_names: set(&["common", "shared", "core", "utils", "helpers", "misc"]),
             allowed_workspace_edges: vec![
@@ -1602,5 +1931,189 @@ mod tests {
             &rules(),
         );
         assert!(has_violation(&violations, "PostgreSQL URL literal"));
+    }
+
+    #[test]
+    fn message_domain_importing_serde_is_rejected() {
+        let mut rules = rules();
+        rules
+            .classes
+            .message_domain
+            .insert(String::from("message-domain"));
+        rules.classes.domain.insert(String::from("message-domain"));
+        rules
+            .allowed_external_dependencies
+            .push(AllowedExternalDependency {
+                from: String::from("message-domain"),
+                dependency: String::from("serde"),
+                kinds: set(&["normal"]),
+            });
+        let graph = [GraphPackage {
+            name: String::from("message-domain"),
+            dependencies: vec![external_dependency("serde", "=1.0.229")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "message-domain imports forbidden"
+        ));
+    }
+
+    #[test]
+    fn message_codec_importing_sqlx_is_rejected() {
+        let mut rules = rules();
+        rules
+            .classes
+            .contract_codec
+            .insert(String::from("message-codec-json"));
+        rules
+            .allowed_external_dependencies
+            .push(AllowedExternalDependency {
+                from: String::from("message-codec-json"),
+                dependency: String::from("sqlx"),
+                kinds: set(&["normal"]),
+            });
+        let graph = [GraphPackage {
+            name: String::from("message-codec-json"),
+            dependencies: vec![external_dependency("sqlx", "=0.9.0")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "message-codec-json imports forbidden"
+        ));
+    }
+
+    #[test]
+    fn platform_api_importing_postgres_message_store_is_rejected() {
+        let mut rules = rules();
+        rules
+            .classes
+            .message_store_provider
+            .insert(String::from("postgres-message-store"));
+        allow_workspace_edge(&mut rules, "platform-api", "postgres-message-store");
+        let graph = [GraphPackage {
+            name: String::from("platform-api"),
+            dependencies: vec![workspace_dependency("postgres-message-store")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "deployable binary"
+        ));
+    }
+
+    #[test]
+    fn tenant_router_importing_message_domain_is_rejected() {
+        let mut rules = rules();
+        rules
+            .classes
+            .message_domain
+            .insert(String::from("message-domain"));
+        allow_workspace_edge(&mut rules, "tenant-router", "message-domain");
+        let graph = [GraphPackage {
+            name: String::from("tenant-router"),
+            dependencies: vec![workspace_dependency("message-domain")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "tenant-router"
+        ));
+    }
+
+    #[test]
+    fn cell_application_importing_message_codec_is_rejected() {
+        let mut rules = rules();
+        rules
+            .classes
+            .contract_codec
+            .insert(String::from("message-codec-json"));
+        allow_workspace_edge(&mut rules, "cell-application", "message-codec-json");
+        let graph = [GraphPackage {
+            name: String::from("cell-application"),
+            dependencies: vec![workspace_dependency("message-codec-json")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "domain/application crate"
+        ));
+    }
+
+    #[test]
+    fn deployable_importing_message_qualification_is_rejected() {
+        let mut rules = rules();
+        rules
+            .classes
+            .qualification_tool
+            .insert(String::from("message-store-qualification"));
+        rules
+            .classes
+            .message_qualification_tool
+            .insert(String::from("message-store-qualification"));
+        allow_workspace_edge(&mut rules, "platform-api", "message-store-qualification");
+        let graph = [GraphPackage {
+            name: String::from("platform-api"),
+            dependencies: vec![workspace_dependency("message-store-qualification")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "qualification tool"
+        ));
+    }
+
+    #[test]
+    fn broker_dependency_introduction_is_rejected() {
+        let mut rules = rules();
+        rules
+            .allowed_external_dependencies
+            .push(AllowedExternalDependency {
+                from: String::from("platform-api"),
+                dependency: String::from("async-nats"),
+                kinds: set(&["normal"]),
+            });
+        let graph = [GraphPackage {
+            name: String::from("platform-api"),
+            dependencies: vec![external_dependency("async-nats", "=0.1.0")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "forbidden broker dependency"
+        ));
+    }
+
+    #[test]
+    fn public_application_json_value_is_rejected() {
+        let root = Path::new("/workspace");
+        let path = root.join("crates/cell-application/src/lib.rs");
+        let violations = source_violations(
+            root,
+            &path,
+            "pub fn untyped() -> serde_json::Value { unreachable!() }",
+            &rules(),
+        );
+        assert!(has_violation(&violations, "serde_json::Value"));
+    }
+
+    #[test]
+    fn public_application_sqlx_transaction_is_rejected() {
+        let root = Path::new("/workspace");
+        let path = root.join("crates/cell-application/src/lib.rs");
+        let violations = source_violations(
+            root,
+            &path,
+            "pub fn leak(value: sqlx::Transaction<'_, sqlx::Postgres>) { drop(value); }",
+            &rules(),
+        );
+        assert!(has_violation(&violations, "SQLx type"));
+    }
+
+    #[test]
+    fn exactly_once_claim_wording_is_rejected_but_denials_are_allowed() {
+        assert!(super::exactly_once_claim(
+            "The system guarantees exactly-once delivery."
+        ));
+        assert!(!super::exactly_once_claim(
+            "The system does not prove exactly-once delivery."
+        ));
+        assert!(!super::exactly_once_claim(
+            "Documentation must not claim exactly-once processing."
+        ));
     }
 }

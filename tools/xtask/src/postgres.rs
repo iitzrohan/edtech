@@ -395,7 +395,12 @@ pub fn migrate_local(root: &Path, project_name: &str) -> Result<()> {
 
 pub fn verify(root: &Path, profile: QualificationProfile) -> Result<()> {
     doctor(root)?;
-    run_disposable(root, profile, None, true)
+    run_disposable(root, profile, None, None, true, true, true)
+}
+
+pub fn verify_message_store(root: &Path, profile: QualificationProfile) -> Result<()> {
+    doctor(root)?;
+    run_disposable(root, profile, None, None, true, true, true)
 }
 
 pub fn qualify(
@@ -411,14 +416,33 @@ pub fn qualify(
         root.join(output)
     };
     guard_evidence_replacement(&output, replace)?;
-    run_disposable(root, profile, Some(&output), false)
+    run_disposable(root, profile, Some(&output), None, false, true, false)
+}
+
+pub fn qualify_message_store(
+    root: &Path,
+    profile: QualificationProfile,
+    output: &Path,
+    replace: bool,
+) -> Result<()> {
+    doctor(root)?;
+    let output = if output.is_absolute() {
+        output.to_path_buf()
+    } else {
+        root.join(output)
+    };
+    guard_message_evidence_replacement(&output, replace)?;
+    run_disposable(root, profile, None, Some(&output), false, true, true)
 }
 
 fn run_disposable(
     root: &Path,
     profile: QualificationProfile,
-    requested_output: Option<&Path>,
+    tenancy_output: Option<&Path>,
+    message_output: Option<&Path>,
     run_binary_checks: bool,
+    run_tenancy: bool,
+    run_message_store: bool,
 ) -> Result<()> {
     let (platform_port, cell_port) = allocate_loopback_ports()?;
     let state = LocalState {
@@ -427,10 +451,10 @@ fn run_disposable(
         cell_port,
     };
     let mut project = LocalProject::prepare(root, state, true)?;
-    let output = requested_output.map_or_else(
-        || project.secret_dir.join("qualification-evidence"),
-        Path::to_path_buf,
-    );
+    let temporary_tenancy_output = project.secret_dir.join("tenancy-qualification-evidence");
+    let temporary_message_output = project.secret_dir.join("message-qualification-evidence");
+    let tenancy_output = tenancy_output.map_or(temporary_tenancy_output.as_path(), |path| path);
+    let message_output = message_output.map_or(temporary_message_output.as_path(), |path| path);
 
     let operation = (|| {
         println!(
@@ -439,7 +463,17 @@ fn run_disposable(
         );
         project.start()?;
         run_migrations(&project)?;
-        run_qualification(&project, profile, &output, requested_output.is_some())?;
+        if run_tenancy {
+            run_qualification(&project, profile, tenancy_output, tenancy_output.exists())?;
+        }
+        if run_message_store {
+            run_message_store_qualification(
+                &project,
+                profile,
+                message_output,
+                message_output.exists(),
+            )?;
+        }
         if run_binary_checks {
             run_database_binary_checks(&project)?;
             verify_router_rejects_database(&project)?;
@@ -460,6 +494,43 @@ fn run_disposable(
             "PostgreSQL verification failed: {operation_error}; cleanup also failed: {cleanup_error}"
         )),
     }
+}
+
+fn run_message_store_qualification(
+    project: &LocalProject<'_>,
+    profile: QualificationProfile,
+    output: &Path,
+    replace: bool,
+) -> Result<()> {
+    let mut command = Command::new("cargo");
+    command
+        .args([
+            "run",
+            "--quiet",
+            "--locked",
+            "--package",
+            "message-store-qualification",
+            "--",
+            "--profile",
+            profile.as_str(),
+            "--output",
+        ])
+        .arg(output)
+        .current_dir(project.root);
+    if replace {
+        command.arg("--replace");
+    }
+    for (name, authority, purpose) in [
+        ("EDTECH_QUAL_PLATFORM_MIGRATOR_REF", "platform", "migrator"),
+        ("EDTECH_QUAL_PLATFORM_API_REF", "platform", "api"),
+        ("EDTECH_QUAL_PLATFORM_WORKER_REF", "platform", "worker"),
+        ("EDTECH_QUAL_CELL_MIGRATOR_REF", "cell", "migrator"),
+        ("EDTECH_QUAL_CELL_API_REF", "cell", "api"),
+        ("EDTECH_QUAL_CELL_WORKER_REF", "cell", "worker"),
+    ] {
+        command.env(name, project.reference(authority, purpose)?);
+    }
+    run_status(&mut command, "message-store qualification")
 }
 
 fn run_migrations(project: &LocalProject<'_>) -> Result<()> {
@@ -656,6 +727,17 @@ fn guard_evidence_replacement(output: &Path, replace: bool) -> Result<()> {
     if !replace && (json.exists() || markdown.exists()) {
         bail!(
             "qualification evidence already exists; pass --replace to overwrite it intentionally"
+        );
+    }
+    Ok(())
+}
+
+fn guard_message_evidence_replacement(output: &Path, replace: bool) -> Result<()> {
+    let json = output.join("message-store-qualification.json");
+    let markdown = output.join("message-store-qualification.md");
+    if !replace && (json.exists() || markdown.exists()) {
+        bail!(
+            "message-store qualification evidence exists; pass --replace to overwrite it intentionally"
         );
     }
     Ok(())

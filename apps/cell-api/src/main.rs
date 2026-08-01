@@ -53,10 +53,11 @@ async fn main() -> Result<()> {
         )
         .await?;
         println!(
-            "database valid: authority=cell cell_id={} server_version={} contract_version={}",
+            "database valid: service={service} authority=cell cell_id={} server_version={} contract_version={} message_store_available={}",
             check.cell_id(),
             check.server_version(),
-            check.contract_version()
+            check.contract_version(),
+            check.message_store_available()
         );
         return Ok(());
     }

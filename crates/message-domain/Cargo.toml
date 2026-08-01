@@ -1,21 +1,20 @@
 [package]
-name = "cell-postgres"
+name = "message-domain"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
+description = "Provider-neutral message identities, metadata, and bounded encoded bytes"
 
 [dependencies]
-cell-application.workspace = true
-message-domain.workspace = true
-postgres-message-store.workspace = true
-postgres-runtime.workspace = true
-sqlx.workspace = true
 tenancy-domain.workspace = true
 thiserror.workspace = true
-tracing.workspace = true
+time.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+test-support.workspace = true
 
 [lints]
 workspace = true
