@@ -1,0 +1,20 @@
+name: ci
+
+on:
+    pull_request:
+    push:
+        branches:
+            - main
+
+permissions:
+    contents: read
+
+jobs:
+    verify:
+        name: Verify workspace
+        runs-on: ubuntu-24.04
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+            - name: Run canonical verification
+              run: cargo xtask verify

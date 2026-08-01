@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "classes": {
+    "domain": [
+      "tenancy-domain",
+      "provisioning-domain",
+      "auth-context",
+      "audit-domain"
+    ],
+    "application": [
+      "platform-application",
+      "cell-application",
+      "routing-application"
+    ],
+    "platform_binary": [
+      "platform-api",
+      "platform-worker",
+      "tenant-router"
+    ],
+    "cell_binary": [
+      "cell-api",
+      "cell-worker"
+    ],
+    "deployable_binary": [
+      "platform-api",
+      "platform-worker",
+      "tenant-router",
+      "cell-api",
+      "cell-worker",
+      "db-migrator"
+    ],
+    "composition_support": [
+      "runtime-config",
+      "process-lifecycle"
+    ],
+    "test_support": [
+      "test-support"
+    ],
+    "tool": [
+      "xtask"
+    ]
+  },
+  "forbidden_package_names": [
+    "common",
+    "shared",
+    "core",
+    "utils",
+    "helpers",
+    "misc"
+  ],
+  "allowed_workspace_edges": [
+    { "from": "provisioning-domain", "to": "tenancy-domain", "kinds": ["normal"] },
+    { "from": "auth-context", "to": "tenancy-domain", "kinds": ["normal"] },
+    { "from": "audit-domain", "to": "auth-context", "kinds": ["normal"] },
+    { "from": "audit-domain", "to": "tenancy-domain", "kinds": ["normal"] },
+
+    { "from": "platform-application", "to": "tenancy-domain", "kinds": ["normal"] },
+    { "from": "platform-application", "to": "provisioning-domain", "kinds": ["normal"] },
+    { "from": "platform-application", "to": "auth-context", "kinds": ["normal"] },
+    { "from": "platform-application", "to": "audit-domain", "kinds": ["normal"] },
+    { "from": "cell-application", "to": "tenancy-domain", "kinds": ["normal"] },
+    { "from": "cell-application", "to": "provisioning-domain", "kinds": ["normal"] },
+    { "from": "cell-application", "to": "auth-context", "kinds": ["normal"] },
+    { "from": "cell-application", "to": "audit-domain", "kinds": ["normal"] },
+    { "from": "routing-application", "to": "tenancy-domain", "kinds": ["normal"] },
+    { "from": "routing-application", "to": "auth-context", "kinds": ["normal"] },
+
+    { "from": "runtime-config", "to": "tenancy-domain", "kinds": ["normal"] },
+    { "from": "test-support", "to": "tenancy-domain", "kinds": ["normal"] },
+    { "from": "test-support", "to": "provisioning-domain", "kinds": ["normal"] },
+    { "from": "test-support", "to": "auth-context", "kinds": ["normal"] },
+    { "from": "test-support", "to": "audit-domain", "kinds": ["normal"] },
+
+    { "from": "platform-api", "to": "platform-application", "kinds": ["normal"] },
+    { "from": "platform-api", "to": "runtime-config", "kinds": ["normal"] },
+    { "from": "platform-api", "to": "process-lifecycle", "kinds": ["normal"] },
+    { "from": "platform-worker", "to": "platform-application", "kinds": ["normal"] },
+    { "from": "platform-worker", "to": "runtime-config", "kinds": ["normal"] },
+    { "from": "platform-worker", "to": "process-lifecycle", "kinds": ["normal"] },
+    { "from": "tenant-router", "to": "routing-application", "kinds": ["normal"] },
+    { "from": "tenant-router", "to": "runtime-config", "kinds": ["normal"] },
+    { "from": "tenant-router", "to": "process-lifecycle", "kinds": ["normal"] },
+    { "from": "cell-api", "to": "cell-application", "kinds": ["normal"] },
+    { "from": "cell-api", "to": "runtime-config", "kinds": ["normal"] },
+    { "from": "cell-api", "to": "process-lifecycle", "kinds": ["normal"] },
+    { "from": "cell-worker", "to": "cell-application", "kinds": ["normal"] },
+    { "from": "cell-worker", "to": "runtime-config", "kinds": ["normal"] },
+    { "from": "cell-worker", "to": "process-lifecycle", "kinds": ["normal"] },
+    { "from": "db-migrator", "to": "runtime-config", "kinds": ["normal"] },
+    { "from": "db-migrator", "to": "process-lifecycle", "kinds": ["normal"] },
+
+    { "from": "tenancy-domain", "to": "test-support", "kinds": ["dev"] },
+    { "from": "provisioning-domain", "to": "test-support", "kinds": ["dev"] },
+    { "from": "auth-context", "to": "test-support", "kinds": ["dev"] },
+    { "from": "audit-domain", "to": "test-support", "kinds": ["dev"] },
+    { "from": "platform-application", "to": "test-support", "kinds": ["dev"] },
+    { "from": "cell-application", "to": "test-support", "kinds": ["dev"] },
+    { "from": "routing-application", "to": "test-support", "kinds": ["dev"] },
+    { "from": "runtime-config", "to": "test-support", "kinds": ["dev"] },
+    { "from": "process-lifecycle", "to": "test-support", "kinds": ["dev"] },
+    { "from": "platform-api", "to": "test-support", "kinds": ["dev"] },
+    { "from": "platform-worker", "to": "test-support", "kinds": ["dev"] },
+    { "from": "tenant-router", "to": "test-support", "kinds": ["dev"] },
+    { "from": "cell-api", "to": "test-support", "kinds": ["dev"] },
+    { "from": "cell-worker", "to": "test-support", "kinds": ["dev"] },
+    { "from": "db-migrator", "to": "test-support", "kinds": ["dev"] }
+  ],
+  "allowed_external_dependencies": [
+    { "from": "tenancy-domain", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "tenancy-domain", "dependency": "uuid", "kinds": ["normal"] },
+    { "from": "tenancy-domain", "dependency": "proptest", "kinds": ["dev"] },
+    { "from": "provisioning-domain", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "provisioning-domain", "dependency": "uuid", "kinds": ["normal"] },
+    { "from": "auth-context", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "auth-context", "dependency": "uuid", "kinds": ["normal"] },
+    { "from": "audit-domain", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "audit-domain", "dependency": "uuid", "kinds": ["normal"] },
+
+    { "from": "runtime-config", "dependency": "config", "kinds": ["normal"] },
+    { "from": "runtime-config", "dependency": "serde", "kinds": ["normal"] },
+    { "from": "runtime-config", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "process-lifecycle", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "process-lifecycle", "dependency": "tokio", "kinds": ["normal"] },
+    { "from": "process-lifecycle", "dependency": "tokio-util", "kinds": ["normal"] },
+    { "from": "process-lifecycle", "dependency": "tracing", "kinds": ["normal"] },
+
+    { "from": "platform-api", "dependency": "anyhow", "kinds": ["normal"] },
+    { "from": "platform-api", "dependency": "tokio", "kinds": ["normal"] },
+    { "from": "platform-api", "dependency": "tracing", "kinds": ["normal"] },
+    { "from": "platform-api", "dependency": "tracing-subscriber", "kinds": ["normal"] },
+    { "from": "platform-worker", "dependency": "anyhow", "kinds": ["normal"] },
+    { "from": "platform-worker", "dependency": "tokio", "kinds": ["normal"] },
+    { "from": "platform-worker", "dependency": "tracing", "kinds": ["normal"] },
+    { "from": "platform-worker", "dependency": "tracing-subscriber", "kinds": ["normal"] },
+    { "from": "tenant-router", "dependency": "anyhow", "kinds": ["normal"] },
+    { "from": "tenant-router", "dependency": "tokio", "kinds": ["normal"] },
+    { "from": "tenant-router", "dependency": "tracing", "kinds": ["normal"] },
+    { "from": "tenant-router", "dependency": "tracing-subscriber", "kinds": ["normal"] },
+    { "from": "cell-api", "dependency": "anyhow", "kinds": ["normal"] },
+    { "from": "cell-api", "dependency": "tokio", "kinds": ["normal"] },
+    { "from": "cell-api", "dependency": "tracing", "kinds": ["normal"] },
+    { "from": "cell-api", "dependency": "tracing-subscriber", "kinds": ["normal"] },
+    { "from": "cell-worker", "dependency": "anyhow", "kinds": ["normal"] },
+    { "from": "cell-worker", "dependency": "tokio", "kinds": ["normal"] },
+    { "from": "cell-worker", "dependency": "tracing", "kinds": ["normal"] },
+    { "from": "cell-worker", "dependency": "tracing-subscriber", "kinds": ["normal"] },
+    { "from": "db-migrator", "dependency": "anyhow", "kinds": ["normal"] },
+    { "from": "db-migrator", "dependency": "tokio", "kinds": ["normal"] },
+    { "from": "db-migrator", "dependency": "tracing", "kinds": ["normal"] },
+    { "from": "db-migrator", "dependency": "tracing-subscriber", "kinds": ["normal"] },
+
+    { "from": "xtask", "dependency": "anyhow", "kinds": ["normal"] },
+    { "from": "xtask", "dependency": "clap", "kinds": ["normal"] },
+    { "from": "xtask", "dependency": "serde", "kinds": ["normal"] },
+    { "from": "xtask", "dependency": "serde_json", "kinds": ["normal"] }
+  ]
+}

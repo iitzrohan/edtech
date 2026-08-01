@@ -1,0 +1,19 @@
+[package]
+name = "cell-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+cell-application.workspace = true
+process-lifecycle.workspace = true
+runtime-config.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
