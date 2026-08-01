@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "classes": {
     "domain": [
       "tenancy-domain",
@@ -28,7 +28,8 @@
       "tenant-router",
       "cell-api",
       "cell-worker",
-      "db-migrator"
+      "db-migrator",
+      "nats-provisioner"
     ],
     "composition_support": [
       "runtime-config",
@@ -49,7 +50,8 @@
     ],
     "qualification_tool": [
       "postgres-qualification",
-      "message-store-qualification"
+      "message-store-qualification",
+      "nats-qualification"
     ],
     "test_support": [
       "test-support"
@@ -57,7 +59,8 @@
     "tool": [
       "xtask",
       "postgres-qualification",
-      "message-store-qualification"
+      "message-store-qualification",
+      "nats-qualification"
     ],
     "message_domain": [
       "message-domain"
@@ -70,6 +73,28 @@
     ],
     "message_qualification_tool": [
       "message-store-qualification"
+    ],
+    "runtime_identity": [
+      "runtime-identity"
+    ],
+    "transport_contract": [
+      "transport-probe-contracts"
+    ],
+    "nats_runtime_provider": [
+      "nats-jetstream"
+    ],
+    "nats_admin_provider": [
+      "nats-jetstream-admin"
+    ],
+    "authority_message_runtime": [
+      "platform-message-runtime",
+      "cell-message-runtime"
+    ],
+    "transport_provisioner": [
+      "nats-provisioner"
+    ],
+    "transport_qualification_tool": [
+      "nats-qualification"
     ]
   },
   "forbidden_package_names": [
@@ -199,7 +224,59 @@
     { "from": "cell-worker", "to": "test-support", "kinds": ["dev"] },
     { "from": "db-migrator", "to": "test-support", "kinds": ["dev"] }
     ,{ "from": "message-domain", "to": "test-support", "kinds": ["dev"] }
-    ,{ "from": "message-codec-json", "to": "test-support", "kinds": ["dev"] }
+    ,{ "from": "message-codec-json", "to": "test-support", "kinds": ["dev"] },
+
+    { "from": "runtime-identity", "to": "message-domain", "kinds": ["normal"] },
+    { "from": "transport-probe-contracts", "to": "message-domain", "kinds": ["normal"] },
+    { "from": "transport-probe-contracts", "to": "message-codec-json", "kinds": ["dev"] },
+    { "from": "transport-probe-contracts", "to": "tenancy-domain", "kinds": ["dev"] },
+    { "from": "nats-jetstream", "to": "message-domain", "kinds": ["normal"] },
+    { "from": "nats-jetstream", "to": "tenancy-domain", "kinds": ["normal"] },
+    { "from": "nats-jetstream-admin", "to": "nats-jetstream", "kinds": ["normal"] },
+    { "from": "nats-jetstream-admin", "to": "tenancy-domain", "kinds": ["normal"] },
+
+    { "from": "platform-message-runtime", "to": "message-codec-json", "kinds": ["normal"] },
+    { "from": "platform-message-runtime", "to": "message-domain", "kinds": ["normal"] },
+    { "from": "platform-message-runtime", "to": "nats-jetstream", "kinds": ["normal"] },
+    { "from": "platform-message-runtime", "to": "platform-postgres", "kinds": ["normal"] },
+    { "from": "platform-message-runtime", "to": "postgres-message-store", "kinds": ["normal"] },
+    { "from": "platform-message-runtime", "to": "process-lifecycle", "kinds": ["normal"] },
+    { "from": "platform-message-runtime", "to": "runtime-identity", "kinds": ["normal"] },
+    { "from": "platform-message-runtime", "to": "transport-probe-contracts", "kinds": ["normal"] },
+    { "from": "platform-message-runtime", "to": "tenancy-domain", "kinds": ["dev"] },
+    { "from": "cell-message-runtime", "to": "cell-postgres", "kinds": ["normal"] },
+    { "from": "cell-message-runtime", "to": "message-codec-json", "kinds": ["normal"] },
+    { "from": "cell-message-runtime", "to": "message-domain", "kinds": ["normal"] },
+    { "from": "cell-message-runtime", "to": "nats-jetstream", "kinds": ["normal"] },
+    { "from": "cell-message-runtime", "to": "postgres-message-store", "kinds": ["normal"] },
+    { "from": "cell-message-runtime", "to": "process-lifecycle", "kinds": ["normal"] },
+    { "from": "cell-message-runtime", "to": "runtime-identity", "kinds": ["normal"] },
+    { "from": "cell-message-runtime", "to": "transport-probe-contracts", "kinds": ["normal"] },
+
+    { "from": "platform-worker", "to": "platform-message-runtime", "kinds": ["normal"] },
+    { "from": "platform-worker", "to": "nats-jetstream", "kinds": ["normal"] },
+    { "from": "platform-worker", "to": "runtime-identity", "kinds": ["normal"] },
+    { "from": "cell-worker", "to": "cell-message-runtime", "kinds": ["normal"] },
+    { "from": "cell-worker", "to": "nats-jetstream", "kinds": ["normal"] },
+    { "from": "cell-worker", "to": "runtime-identity", "kinds": ["normal"] },
+    { "from": "cell-worker", "to": "tenancy-domain", "kinds": ["normal"] },
+
+    { "from": "nats-provisioner", "to": "nats-jetstream", "kinds": ["normal"] },
+    { "from": "nats-provisioner", "to": "nats-jetstream-admin", "kinds": ["normal"] },
+    { "from": "nats-provisioner", "to": "runtime-config", "kinds": ["normal"] },
+    { "from": "nats-provisioner", "to": "secret-resolution", "kinds": ["normal"] },
+
+    { "from": "nats-qualification", "to": "cell-postgres", "kinds": ["normal"] },
+    { "from": "nats-qualification", "to": "message-codec-json", "kinds": ["normal"] },
+    { "from": "nats-qualification", "to": "message-domain", "kinds": ["normal"] },
+    { "from": "nats-qualification", "to": "nats-jetstream", "kinds": ["normal"] },
+    { "from": "nats-qualification", "to": "nats-jetstream-admin", "kinds": ["normal"] },
+    { "from": "nats-qualification", "to": "platform-postgres", "kinds": ["normal"] },
+    { "from": "nats-qualification", "to": "postgres-message-store", "kinds": ["normal"] },
+    { "from": "nats-qualification", "to": "postgres-runtime", "kinds": ["normal"] },
+    { "from": "nats-qualification", "to": "secret-resolution", "kinds": ["normal"] },
+    { "from": "nats-qualification", "to": "tenancy-domain", "kinds": ["normal"] },
+    { "from": "nats-qualification", "to": "transport-probe-contracts", "kinds": ["normal"] }
   ],
   "allowed_external_dependencies": [
     { "from": "tenancy-domain", "dependency": "thiserror", "kinds": ["normal"] },
@@ -296,6 +373,69 @@
     { "from": "xtask", "dependency": "clap", "kinds": ["normal"] },
     { "from": "xtask", "dependency": "getrandom", "kinds": ["normal"] },
     { "from": "xtask", "dependency": "serde", "kinds": ["normal"] },
-    { "from": "xtask", "dependency": "serde_json", "kinds": ["normal"] }
+    { "from": "xtask", "dependency": "serde_json", "kinds": ["normal"] },
+    { "from": "xtask", "dependency": "toml", "kinds": ["normal"] },
+
+    { "from": "runtime-identity", "dependency": "getrandom", "kinds": ["normal"] },
+    { "from": "runtime-identity", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "runtime-identity", "dependency": "time", "kinds": ["normal"] },
+    { "from": "runtime-identity", "dependency": "uuid", "kinds": ["normal"] },
+    { "from": "transport-probe-contracts", "dependency": "serde", "kinds": ["normal"] },
+    { "from": "transport-probe-contracts", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "transport-probe-contracts", "dependency": "uuid", "kinds": ["normal"] },
+    { "from": "transport-probe-contracts", "dependency": "serde_json", "kinds": ["dev"] },
+    { "from": "transport-probe-contracts", "dependency": "time", "kinds": ["dev"] },
+
+    { "from": "nats-jetstream", "dependency": "async-nats", "kinds": ["normal"] },
+    { "from": "nats-jetstream", "dependency": "futures-util", "kinds": ["normal"] },
+    { "from": "nats-jetstream", "dependency": "secrecy", "kinds": ["normal"] },
+    { "from": "nats-jetstream", "dependency": "serde", "kinds": ["normal"] },
+    { "from": "nats-jetstream", "dependency": "serde_json", "kinds": ["normal"] },
+    { "from": "nats-jetstream", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "nats-jetstream", "dependency": "time", "kinds": ["normal"] },
+    { "from": "nats-jetstream", "dependency": "tokio", "kinds": ["normal"] },
+    { "from": "nats-jetstream", "dependency": "tracing", "kinds": ["normal"] },
+    { "from": "nats-jetstream", "dependency": "uuid", "kinds": ["dev"] },
+    { "from": "nats-jetstream-admin", "dependency": "async-nats", "kinds": ["normal"] },
+    { "from": "nats-jetstream-admin", "dependency": "futures-util", "kinds": ["normal"] },
+    { "from": "nats-jetstream-admin", "dependency": "secrecy", "kinds": ["normal"] },
+    { "from": "nats-jetstream-admin", "dependency": "serde", "kinds": ["normal"] },
+    { "from": "nats-jetstream-admin", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "nats-jetstream-admin", "dependency": "time", "kinds": ["normal"] },
+    { "from": "nats-jetstream-admin", "dependency": "tokio", "kinds": ["normal"] },
+    { "from": "nats-jetstream-admin", "dependency": "toml", "kinds": ["normal"] },
+    { "from": "nats-jetstream-admin", "dependency": "tracing", "kinds": ["normal"] },
+
+    { "from": "platform-message-runtime", "dependency": "futures-util", "kinds": ["normal"] },
+    { "from": "platform-message-runtime", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "platform-message-runtime", "dependency": "tokio", "kinds": ["normal"] },
+    { "from": "platform-message-runtime", "dependency": "tokio-util", "kinds": ["normal"] },
+    { "from": "platform-message-runtime", "dependency": "tracing", "kinds": ["normal"] },
+    { "from": "platform-message-runtime", "dependency": "time", "kinds": ["dev"] },
+    { "from": "platform-message-runtime", "dependency": "uuid", "kinds": ["dev"] },
+    { "from": "cell-message-runtime", "dependency": "futures-util", "kinds": ["normal"] },
+    { "from": "cell-message-runtime", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "cell-message-runtime", "dependency": "tokio", "kinds": ["normal"] },
+    { "from": "cell-message-runtime", "dependency": "tokio-util", "kinds": ["normal"] },
+    { "from": "cell-message-runtime", "dependency": "tracing", "kinds": ["normal"] },
+    { "from": "cell-message-runtime", "dependency": "time", "kinds": ["dev"] },
+    { "from": "cell-message-runtime", "dependency": "uuid", "kinds": ["dev"] },
+
+    { "from": "nats-provisioner", "dependency": "anyhow", "kinds": ["normal"] },
+    { "from": "nats-provisioner", "dependency": "tokio", "kinds": ["normal"] },
+    { "from": "nats-provisioner", "dependency": "tracing", "kinds": ["normal"] },
+    { "from": "nats-provisioner", "dependency": "tracing-subscriber", "kinds": ["normal"] },
+
+    { "from": "nats-qualification", "dependency": "anyhow", "kinds": ["normal"] },
+    { "from": "nats-qualification", "dependency": "async-nats", "kinds": ["normal"] },
+    { "from": "nats-qualification", "dependency": "clap", "kinds": ["normal"] },
+    { "from": "nats-qualification", "dependency": "futures-util", "kinds": ["normal"] },
+    { "from": "nats-qualification", "dependency": "secrecy", "kinds": ["normal"] },
+    { "from": "nats-qualification", "dependency": "serde", "kinds": ["normal"] },
+    { "from": "nats-qualification", "dependency": "serde_json", "kinds": ["normal"] },
+    { "from": "nats-qualification", "dependency": "sqlx", "kinds": ["normal"] },
+    { "from": "nats-qualification", "dependency": "time", "kinds": ["normal"] },
+    { "from": "nats-qualification", "dependency": "tokio", "kinds": ["normal"] },
+    { "from": "nats-qualification", "dependency": "uuid", "kinds": ["normal"] }
   ]
 }

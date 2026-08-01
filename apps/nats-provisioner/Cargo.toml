@@ -1,0 +1,20 @@
+[package]
+name = "nats-provisioner"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+nats-jetstream.workspace = true
+nats-jetstream-admin.workspace = true
+runtime-config.workspace = true
+secret-resolution.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

@@ -11,8 +11,9 @@ use cell_application::TenantExecutionScope;
 use message_domain::{EncodedMessage, MessageAuthority, MessageKind, MessageScope, MessageTarget};
 use postgres_message_store::{
     ClaimBatchSize, ClaimedMessage, ConsumerName, EnqueueOutcome, FailureCategory,
-    InboxReceiptOutcome, LeaseDuration, MessageStoreError, MessageStoreNamespace, OutboxLeaseId,
-    PublishMarkOutcome, PublisherInstanceId, RescheduleOutcome, RetryDelay,
+    InboxReceiptOutcome, LeaseDuration, MessageStoreError, MessageStoreErrorKind,
+    MessageStoreNamespace, OutboxLeaseId, PublishMarkOutcome, PublisherInstanceId,
+    RescheduleOutcome, RetryDelay,
 };
 use postgres_runtime::{
     DatabaseCredential, PostgresConnectionConfig, PostgresPool, ProviderError, ProviderErrorKind,
@@ -188,6 +189,10 @@ pub enum CellDatabaseErrorKind {
     InvalidInboundTarget,
     /// Reusable message-store mechanics failed.
     MessageStoreFailure,
+    /// One message identity names different immutable content.
+    MessageIdentityConflict,
+    /// Immutable stored message state is corrupt or cannot be represented.
+    StoreCorruption,
     /// An inbox identity conflicts with immutable stored content.
     InboxConflict,
     /// The execution scope names another logical Cell.
@@ -220,6 +225,8 @@ impl CellDatabaseErrorKind {
             Self::InvalidOutboundAuthority => "invalid_outbound_authority",
             Self::InvalidInboundTarget => "invalid_inbound_target",
             Self::MessageStoreFailure => "message_store_failure",
+            Self::MessageIdentityConflict => "message_identity_conflict",
+            Self::StoreCorruption => "store_corruption",
             Self::InboxConflict => "inbox_conflict",
             Self::WrongCell => "wrong_cell",
             Self::TenantAbsent => "tenant_absent",
@@ -280,8 +287,17 @@ impl From<ProviderError> for CellDatabaseError {
 }
 
 impl From<MessageStoreError> for CellDatabaseError {
-    fn from(_error: MessageStoreError) -> Self {
-        Self::new(CellDatabaseErrorKind::MessageStoreFailure)
+    fn from(error: MessageStoreError) -> Self {
+        let kind = match error.kind() {
+            MessageStoreErrorKind::ProviderFailure => CellDatabaseErrorKind::MessageStoreFailure,
+            MessageStoreErrorKind::MessageIdentityConflict => {
+                CellDatabaseErrorKind::MessageIdentityConflict
+            }
+            MessageStoreErrorKind::StoreCorruption | MessageStoreErrorKind::InvalidStoredValue => {
+                CellDatabaseErrorKind::StoreCorruption
+            }
+        };
+        Self::new(kind)
     }
 }
 

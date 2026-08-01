@@ -1,0 +1,29 @@
+[package]
+name = "cell-message-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+cell-postgres.workspace = true
+futures-util.workspace = true
+message-codec-json.workspace = true
+message-domain.workspace = true
+nats-jetstream.workspace = true
+postgres-message-store.workspace = true
+process-lifecycle.workspace = true
+runtime-identity.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+transport-probe-contracts.workspace = true
+
+[dev-dependencies]
+time.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

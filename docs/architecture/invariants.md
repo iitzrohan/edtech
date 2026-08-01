@@ -33,11 +33,18 @@ These rules apply to this foundation and every later checkpoint.
 20. Message metadata and evidence contain no secrets, payload content, or envelope bytes.
 21. Commands target exactly one authority; events record committed facts and have no target.
 22. Outbox and inbox mechanics commit only with their authority-local database effects.
-23. No EdTech product feature is part of Checkpoint 3.
-24. Checkpoint 3 must not be represented as proof of production readiness, cloud network
-    isolation, network delivery, broker behavior, provider portability, high availability, disaster recovery,
-    or protection against a completely compromised Cell runtime.
+23. Application subjects are fixed and derived from validated envelope routes. Tenant identity and
+    assignment epoch never become subject tokens or broker authority.
+24. Runtime workers bind pre-provisioned durable consumers and never mutate topology. Only the
+    one-shot provisioner owns administrative capability.
+25. Broker acceptance precedes a database publication marker; inbox commit precedes broker
+    acknowledgment. These states are never collapsed into a business-completion claim.
+26. No EdTech product feature is part of Checkpoint 4.
+27. Checkpoint 4 must not be represented as proof of production readiness, cloud network
+    isolation, multi-zone availability, provider portability, disaster recovery, or protection
+    against a completely compromised Cell runtime.
 
 Dependency and source boundaries are enforced by `cargo xtask verify-architecture`. Local database
 authority, migration, privilege, and tenant-isolation behavior is exercised by
-`cargo xtask verify-postgres`; distributed-systems and production behavior require later evidence.
+`cargo xtask verify-postgres`; bounded local distributed behavior is exercised by
+`cargo xtask verify-nats`. Production behavior requires separate evidence.

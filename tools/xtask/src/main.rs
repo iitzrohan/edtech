@@ -3,13 +3,14 @@
 //! `xtask` performs toolchain diagnostics, static architecture enforcement, configuration smoke
 //! checks, and the deterministic full verification sequence without external services.
 
+mod nats;
 mod postgres;
 
 use std::{
     collections::{BTreeSet, HashSet},
     env, fs,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -42,6 +43,44 @@ enum RepositoryCommand {
     Verify,
     /// Check Docker, Compose, the pinned image, and local `PostgreSQL` infrastructure.
     DoctorPostgres,
+    /// Check Docker, Compose, OpenSSL, the locked image index, and local NATS templates.
+    DoctorNats,
+    /// Start a persistent manual three-node TLS NATS `JetStream` cluster.
+    NatsUp {
+        /// Safe Compose project name.
+        #[arg(long, default_value = "edtech-nats-local")]
+        project: String,
+        /// Optional nats-1 client loopback port.
+        #[arg(long)]
+        nats_1_port: Option<u16>,
+        /// Optional nats-2 client loopback port.
+        #[arg(long)]
+        nats_2_port: Option<u16>,
+        /// Optional nats-3 client loopback port.
+        #[arg(long)]
+        nats_3_port: Option<u16>,
+        /// Optional nats-1 monitor loopback port.
+        #[arg(long)]
+        monitor_1_port: Option<u16>,
+        /// Optional nats-2 monitor loopback port.
+        #[arg(long)]
+        monitor_2_port: Option<u16>,
+        /// Optional nats-3 monitor loopback port.
+        #[arg(long)]
+        monitor_3_port: Option<u16>,
+    },
+    /// Apply and verify topology in a healthy manual NATS cluster.
+    ProvisionNatsLocal {
+        /// Safe Compose project name.
+        #[arg(long, default_value = "edtech-nats-local")]
+        project: String,
+    },
+    /// Remove a manual NATS cluster, volumes, certificates, and credentials.
+    NatsDown {
+        /// Safe Compose project name.
+        #[arg(long, default_value = "edtech-nats-local")]
+        project: String,
+    },
     /// Start a persistent manual Platform/Cell `PostgreSQL` pair.
     PostgresUp {
         /// Safe Compose project name.
@@ -102,7 +141,31 @@ enum RepositoryCommand {
         #[arg(long)]
         replace: bool,
     },
-    /// Run workspace verification followed by the `PostgreSQL` CI profile.
+    /// Qualify the complete Checkpoint 4 transport against disposable authorities.
+    VerifyNats {
+        /// Exact transport qualification workload.
+        #[arg(long, value_enum, default_value_t = QualificationProfile::Ci)]
+        profile: QualificationProfile,
+    },
+    /// Qualify Checkpoint 4 and write stable aggregate evidence.
+    QualifyNats {
+        /// Exact transport qualification workload.
+        #[arg(long, value_enum)]
+        profile: QualificationProfile,
+        /// Directory for JSON and Markdown evidence.
+        #[arg(long)]
+        output: PathBuf,
+        /// Permit replacement of existing transport evidence.
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Run inherited `PostgreSQL` and Checkpoint 4 transport qualification in one environment.
+    VerifyIntegration {
+        /// Exact integration workload.
+        #[arg(long, value_enum, default_value_t = QualificationProfile::Ci)]
+        profile: QualificationProfile,
+    },
+    /// Run workspace verification followed by the combined CI integration profile.
     VerifyAll,
 }
 
@@ -115,6 +178,30 @@ fn main() -> Result<()> {
         RepositoryCommand::Smoke => smoke(&root),
         RepositoryCommand::Verify => verify(&root),
         RepositoryCommand::DoctorPostgres => postgres::doctor(&root),
+        RepositoryCommand::DoctorNats => nats::doctor(&root),
+        RepositoryCommand::NatsUp {
+            project,
+            nats_1_port,
+            nats_2_port,
+            nats_3_port,
+            monitor_1_port,
+            monitor_2_port,
+            monitor_3_port,
+        } => {
+            let client_ports = match (nats_1_port, nats_2_port, nats_3_port) {
+                (None, None, None) => None,
+                (Some(first), Some(second), Some(third)) => Some([first, second, third]),
+                _ => bail!("all three NATS client port overrides must be supplied together"),
+            };
+            let monitor_ports = match (monitor_1_port, monitor_2_port, monitor_3_port) {
+                (None, None, None) => None,
+                (Some(first), Some(second), Some(third)) => Some([first, second, third]),
+                _ => bail!("all three NATS monitor port overrides must be supplied together"),
+            };
+            nats::up(&root, &project, client_ports, monitor_ports)
+        }
+        RepositoryCommand::ProvisionNatsLocal { project } => nats::provision_local(&root, &project),
+        RepositoryCommand::NatsDown { project } => nats::down(&root, &project),
         RepositoryCommand::PostgresUp {
             project,
             platform_port,
@@ -136,11 +223,202 @@ fn main() -> Result<()> {
             output,
             replace,
         } => postgres::qualify_message_store(&root, profile, &output, replace),
+        RepositoryCommand::VerifyNats { profile }
+        | RepositoryCommand::VerifyIntegration { profile } => {
+            verify_integration(&root, profile, None, false)
+        }
+        RepositoryCommand::QualifyNats {
+            profile,
+            output,
+            replace,
+        } => verify_integration(&root, profile, Some(&output), replace),
         RepositoryCommand::VerifyAll => {
             verify(&root)?;
-            postgres::verify(&root, QualificationProfile::Ci)
+            verify_integration(&root, QualificationProfile::Ci, None, false)
         }
     }
+}
+
+fn verify_integration(
+    root: &Path,
+    profile: QualificationProfile,
+    output: Option<&Path>,
+    replace: bool,
+) -> Result<()> {
+    doctor(root)?;
+    postgres::doctor(root)?;
+    nats::doctor(root)?;
+    let mut postgres_project = postgres::disposable(root)?;
+    let mut nats_project = nats::disposable(root)?;
+    let evidence_output = output.map_or_else(
+        || {
+            postgres_project
+                .temporary_directory()
+                .join("nats-qualification-evidence")
+        },
+        |path| {
+            if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                root.join(path)
+            }
+        },
+    );
+
+    let operation = (|| {
+        println!(
+            "verify-integration: starting one disposable PostgreSQL/NATS environment (profile={})",
+            profile.as_str()
+        );
+        postgres_project.start()?;
+        nats_project.start()?;
+        postgres::migrate(&postgres_project)?;
+        postgres::verify_existing_prerequisites(&postgres_project, profile)?;
+        nats::run_provisioner(&nats_project, None)?;
+        nats::run_provisioner(&nats_project, Some("--check-transport"))?;
+        run_nats_qualification(
+            root,
+            profile,
+            &evidence_output,
+            replace || output.is_none(),
+            &postgres_project,
+            &nats_project,
+        )
+    })();
+    let nats_cleanup = nats_project.cleanup();
+    let postgres_cleanup = postgres_project.cleanup();
+    match (operation, nats_cleanup, postgres_cleanup) {
+        (Ok(()), Ok(()), Ok(())) => {
+            println!(
+                "verify-integration: profile={} passed; workers and disposable authorities removed",
+                profile.as_str()
+            );
+            Ok(())
+        }
+        (Err(error), Ok(()), Ok(()))
+        | (Ok(()), Err(error), Ok(()))
+        | (Ok(()), Ok(()), Err(error)) => Err(error),
+        (operation, nats_cleanup, postgres_cleanup) => Err(anyhow!(
+            "integration operation={}; NATS cleanup={}; PostgreSQL cleanup={}",
+            result_label(&operation),
+            result_label(&nats_cleanup),
+            result_label(&postgres_cleanup)
+        )),
+    }
+}
+
+fn result_label<T>(result: &Result<T>) -> &'static str {
+    if result.is_ok() { "ok" } else { "failed" }
+}
+
+fn run_nats_qualification(
+    root: &Path,
+    profile: QualificationProfile,
+    output: &Path,
+    replace: bool,
+    postgres_project: &postgres::LocalProject<'_>,
+    nats_project: &nats::NatsProject<'_>,
+) -> Result<()> {
+    run_checked(
+        root,
+        "cargo build --locked --package platform-worker --package cell-worker --package nats-qualification",
+        "cargo",
+        &[
+            "build",
+            "--locked",
+            "--package",
+            "platform-worker",
+            "--package",
+            "cell-worker",
+            "--package",
+            "nats-qualification",
+        ],
+    )?;
+    let executable = root
+        .join("target/debug")
+        .join(format!("nats-qualification{}", env::consts::EXE_SUFFIX));
+    let mut command = Command::new(executable);
+    command
+        .arg("--profile")
+        .arg(profile.as_str())
+        .arg("--output")
+        .arg(output)
+        .current_dir(root)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    if replace {
+        command.arg("--replace");
+    }
+    clear_edtech_environment(&mut command);
+    for (name, authority, purpose) in [
+        ("EDTECH_QUAL_PLATFORM_MIGRATOR_REF", "platform", "migrator"),
+        ("EDTECH_QUAL_PLATFORM_API_REF", "platform", "api"),
+        ("EDTECH_QUAL_PLATFORM_WORKER_REF", "platform", "worker"),
+        ("EDTECH_QUAL_CELL_MIGRATOR_REF", "cell", "migrator"),
+        ("EDTECH_QUAL_CELL_API_REF", "cell", "api"),
+        ("EDTECH_QUAL_CELL_WORKER_REF", "cell", "worker"),
+    ] {
+        command.env(name, postgres_project.reference(authority, purpose)?);
+    }
+    command
+        .env("EDTECH_QUAL_NATS_SERVERS", nats_project.server_list())
+        .env("EDTECH_QUAL_NATS_CA_FILE", nats_project.ca_path())
+        .env(
+            "EDTECH_QUAL_NATS_PROVISIONER_REF",
+            nats_project.credential_reference("provisioner"),
+        )
+        .env(
+            "EDTECH_QUAL_NATS_PLATFORM_WORKER_REF",
+            nats_project.credential_reference("platform-worker"),
+        )
+        .env(
+            "EDTECH_QUAL_NATS_CELL_WORKER_REF",
+            nats_project.credential_reference("cell-worker"),
+        )
+        .env(
+            "EDTECH_QUAL_NATS_INJECTOR_REF",
+            nats_project.credential_reference("qualification-injector"),
+        )
+        .env(
+            "EDTECH_QUAL_NATS_INSPECTOR_REF",
+            nats_project.credential_reference("qualification-inspector"),
+        )
+        .env(
+            "EDTECH_QUAL_NATS_SYSTEM_REF",
+            nats_project.credential_reference("system"),
+        )
+        .env("EDTECH_QUAL_NATS_PROJECT", nats_project.project_name())
+        .env("EDTECH_QUAL_NATS_STATE_DIR", nats_project.state_directory())
+        .env(
+            "EDTECH_QUAL_NATS_MONITOR_PORTS",
+            nats_project
+                .monitor_ports()
+                .iter()
+                .map(u16::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+        .env(
+            "EDTECH_QUAL_WORK_DIRECTORY",
+            postgres_project.temporary_directory(),
+        );
+    let status = command
+        .status()
+        .context("could not start NATS qualification")?;
+    if status.success() {
+        Ok(())
+    } else {
+        bail!("NATS qualification failed with exit status {status}")
+    }
+}
+
+fn clear_edtech_environment(command: &mut Command) {
+    for (key, _) in env::vars_os()
+        .filter(|(key, _)| key.to_str().is_some_and(|key| key.starts_with("EDTECH__")))
+    {
+        command.env_remove(key);
+    }
+    command.env_remove("EDTECH_CONFIG_FILE");
 }
 
 fn workspace_root() -> Result<PathBuf> {
@@ -152,6 +430,7 @@ fn workspace_root() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("xtask is not located under tools/xtask"))
 }
 
+#[allow(clippy::too_many_lines)]
 fn doctor(root: &Path) -> Result<()> {
     let rustc_version = capture(root, "rustc", &["--version"])?;
     if !rustc_version.starts_with(&format!("rustc {REQUIRED_RUST_VERSION} ")) {
@@ -177,6 +456,7 @@ fn doctor(root: &Path) -> Result<()> {
         "apps/cell-api",
         "apps/cell-worker",
         "apps/db-migrator",
+        "apps/nats-provisioner",
         "crates/tenancy-domain",
         "crates/provisioning-domain",
         "crates/auth-context",
@@ -196,31 +476,52 @@ fn doctor(root: &Path) -> Result<()> {
         "crates/message-domain",
         "crates/message-codec-json",
         "crates/postgres-message-store",
+        "crates/runtime-identity",
+        "crates/transport-probe-contracts",
+        "crates/nats-jetstream",
+        "crates/nats-jetstream-admin",
+        "crates/platform-message-runtime",
+        "crates/cell-message-runtime",
         "infra/local/postgres/compose.yml",
         "infra/local/postgres/platform/init/001-bootstrap.sh",
         "infra/local/postgres/cell/init/001-bootstrap.sh",
+        "infra/local/nats/compose.yml",
+        "infra/local/nats/nats-image.lock.toml",
+        "infra/local/nats/templates/nats-server.conf.tmpl",
+        "infra/local/nats/templates/topology.toml",
         "docs/adr/0001-workspace-foundation.md",
         "docs/adr/0002-postgresql-authority-and-tenancy.md",
         "docs/adr/0003-message-contract-and-transactional-store.md",
+        "docs/adr/0004-nats-jetstream-transport.md",
         "docs/architecture/invariants.md",
         "docs/architecture/database-authorities.md",
         "docs/architecture/tenant-storage-rules.md",
         "docs/architecture/message-contracts.md",
         "docs/architecture/message-delivery-semantics.md",
+        "docs/architecture/nats-topology.md",
+        "docs/architecture/transport-routing.md",
+        "docs/architecture/runtime-message-delivery.md",
         "docs/checkpoints/01-workspace-foundation.md",
         "docs/checkpoints/02-postgresql-authority-and-tenancy.md",
         "docs/checkpoints/03-message-contract-and-transactional-store.md",
+        "docs/checkpoints/04-nats-jetstream-transport.md",
         "docs/contracts/message-envelope-v1.md",
         "docs/contracts/message-envelope-v1.schema.json",
         "docs/contracts/fixtures/qualification-command-v1.json",
         "docs/contracts/fixtures/qualification-event-v1.json",
+        "docs/contracts/fixtures/transport-cell-probe-requested-v1.json",
+        "docs/contracts/fixtures/transport-cell-probe-observed-v1.json",
+        "docs/contracts/fixtures/transport-platform-probe-requested-v1.json",
+        "docs/contracts/fixtures/transport-platform-probe-observed-v1.json",
         "docs/evidence/checkpoint-02/postgres-qualification.json",
         "docs/evidence/checkpoint-02/postgres-qualification.md",
         "docs/runbooks/local-postgres.md",
         "docs/runbooks/message-store-qualification.md",
+        "docs/runbooks/local-nats.md",
         "tools/xtask",
         "tools/postgres-qualification",
         "tools/message-store-qualification",
+        "tools/nats-qualification",
         ".editorconfig",
         ".gitignore",
         "Cargo.lock",
@@ -302,7 +603,7 @@ fn verify(root: &Path) -> Result<()> {
 fn verify_contracts(root: &Path) -> Result<()> {
     run_checked(
         root,
-        "cargo test --package message-domain --package message-codec-json --locked",
+        "cargo test --package message-domain --package message-codec-json --package transport-probe-contracts --locked",
         "cargo",
         &[
             "test",
@@ -310,6 +611,8 @@ fn verify_contracts(root: &Path) -> Result<()> {
             "message-domain",
             "--package",
             "message-codec-json",
+            "--package",
+            "transport-probe-contracts",
             "--locked",
         ],
     )?;
@@ -326,6 +629,22 @@ fn verify_contracts(root: &Path) -> Result<()> {
             "\"message_kind\":\"command\"",
         ),
         ("qualification-event-v1.json", "\"message_kind\":\"event\""),
+        (
+            "transport-cell-probe-requested-v1.json",
+            "\"message_kind\":\"command\"",
+        ),
+        (
+            "transport-cell-probe-observed-v1.json",
+            "\"message_kind\":\"event\"",
+        ),
+        (
+            "transport-platform-probe-requested-v1.json",
+            "\"message_kind\":\"command\"",
+        ),
+        (
+            "transport-platform-probe-observed-v1.json",
+            "\"message_kind\":\"event\"",
+        ),
     ];
     let mut descriptors = BTreeSet::new();
     for (file_name, kind_marker) in fixtures {
@@ -405,7 +724,7 @@ fn verify_contracts(root: &Path) -> Result<()> {
             }
         }
     }
-    println!("verify-contracts: 2 canonical fixtures and envelope schema passed");
+    println!("verify-contracts: 6 canonical fixtures and envelope schema passed");
     Ok(())
 }
 
@@ -420,6 +739,8 @@ fn exactly_once_claim(line: &str) -> bool {
     }
     ![
         "no exactly",
+        "no global exactly",
+        "no system-wide exactly",
         "not exactly",
         "never exactly",
         "does not prove exactly",
@@ -500,6 +821,13 @@ struct RuleClasses {
     contract_codec: BTreeSet<String>,
     message_store_provider: BTreeSet<String>,
     message_qualification_tool: BTreeSet<String>,
+    runtime_identity: BTreeSet<String>,
+    transport_contract: BTreeSet<String>,
+    nats_runtime_provider: BTreeSet<String>,
+    nats_admin_provider: BTreeSet<String>,
+    authority_message_runtime: BTreeSet<String>,
+    transport_provisioner: BTreeSet<String>,
+    transport_qualification_tool: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -588,7 +916,7 @@ fn read_rules(root: &Path) -> Result<DependencyRules> {
         fs::read_to_string(&path).with_context(|| format!("could not read {}", path.display()))?;
     let rules: DependencyRules = serde_json::from_str(&contents)
         .with_context(|| format!("could not parse {}", path.display()))?;
-    if rules.schema_version != 3 {
+    if rules.schema_version != 4 {
         bail!(
             "unsupported dependency-rule schema {}",
             rules.schema_version
@@ -761,10 +1089,26 @@ fn validate_workspace_edge(
             package.name, dependency.name
         ));
     }
+    if rules.classes.transport_contract.contains(&package.name)
+        && (rules
+            .classes
+            .nats_runtime_provider
+            .contains(&dependency.name)
+            || rules.classes.nats_admin_provider.contains(&dependency.name)
+            || rules
+                .classes
+                .authority_message_runtime
+                .contains(&dependency.name))
+    {
+        violations.push(format!(
+            "transport contract crate `{}` imports forbidden runtime provider `{}`",
+            package.name, dependency.name
+        ));
+    }
     if rules.classes.platform_binary.contains(&package.name)
         && matches!(
             dependency.name.as_str(),
-            "cell-application" | "cell-postgres" | "cell-migrations"
+            "cell-application" | "cell-postgres" | "cell-migrations" | "cell-message-runtime"
         )
     {
         violations.push(format!(
@@ -775,7 +1119,10 @@ fn validate_workspace_edge(
     if rules.classes.cell_binary.contains(&package.name)
         && matches!(
             dependency.name.as_str(),
-            "platform-application" | "platform-postgres" | "platform-migrations"
+            "platform-application"
+                | "platform-postgres"
+                | "platform-migrations"
+                | "platform-message-runtime"
         )
     {
         violations.push(format!(
@@ -792,7 +1139,12 @@ fn validate_workspace_edge(
             || rules
                 .classes
                 .message_store_provider
-                .contains(&dependency.name))
+                .contains(&dependency.name)
+            || rules
+                .classes
+                .nats_runtime_provider
+                .contains(&dependency.name)
+            || rules.classes.nats_admin_provider.contains(&dependency.name))
     {
         violations.push(format!(
             "tenant-router imports forbidden database package `{}`",
@@ -839,6 +1191,48 @@ fn validate_workspace_edge(
         violations.push(format!(
             "qualification tool `{}` is imported by production package `{}`",
             dependency.name, package.name
+        ));
+    }
+    if rules.classes.nats_admin_provider.contains(&dependency.name)
+        && !(rules.classes.transport_provisioner.contains(&package.name)
+            || rules
+                .classes
+                .transport_qualification_tool
+                .contains(&package.name))
+    {
+        violations.push(format!(
+            "NATS administration provider `{}` is imported by forbidden runtime package `{}`",
+            dependency.name, package.name
+        ));
+    }
+    if rules
+        .classes
+        .authority_message_runtime
+        .contains(&package.name)
+        && package.name == "platform-message-runtime"
+        && matches!(
+            dependency.name.as_str(),
+            "cell-postgres" | "cell-message-runtime"
+        )
+    {
+        violations.push(format!(
+            "Platform authority runtime imports forbidden Cell provider `{}`",
+            dependency.name
+        ));
+    }
+    if rules
+        .classes
+        .authority_message_runtime
+        .contains(&package.name)
+        && package.name == "cell-message-runtime"
+        && matches!(
+            dependency.name.as_str(),
+            "platform-postgres" | "platform-message-runtime"
+        )
+    {
+        violations.push(format!(
+            "Cell authority runtime imports forbidden Platform provider `{}`",
+            dependency.name
         ));
     }
     if (rules.classes.domain.contains(&package.name)
@@ -898,6 +1292,7 @@ fn validate_workspace_edge(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_external_edge(
     package: &GraphPackage,
     dependency: &GraphDependency,
@@ -941,10 +1336,20 @@ fn validate_external_edge(
             dependency.name
         ));
     }
-    if matches!(
-        dependency.name.as_str(),
-        "async-nats" | "rdkafka" | "lapin" | "pulsar"
-    ) {
+    if dependency.name == "async-nats"
+        && !(rules.classes.nats_runtime_provider.contains(&package.name)
+            || rules.classes.nats_admin_provider.contains(&package.name)
+            || rules
+                .classes
+                .transport_qualification_tool
+                .contains(&package.name))
+    {
+        violations.push(format!(
+            "package `{}` imports async-nats outside the approved NATS provider or qualification boundary",
+            package.name
+        ));
+    }
+    if matches!(dependency.name.as_str(), "rdkafka" | "lapin" | "pulsar") {
         violations.push(format!(
             "package `{}` introduces forbidden broker dependency `{}`",
             package.name, dependency.name
@@ -986,7 +1391,9 @@ fn validate_external_edge(
             || rules.classes.secret_adapter.contains(&package.name)
             || rules.classes.postgres_provider.contains(&package.name)
             || rules.classes.migration_adapter.contains(&package.name)
-            || rules.classes.qualification_tool.contains(&package.name))
+            || rules.classes.qualification_tool.contains(&package.name)
+            || rules.classes.nats_runtime_provider.contains(&package.name)
+            || rules.classes.nats_admin_provider.contains(&package.name))
     {
         violations.push(format!(
             "package `{}` imports secrecy outside a secret, provider, composition, migration, or qualification boundary",
@@ -994,7 +1401,10 @@ fn validate_external_edge(
         ));
     }
 
-    if dependency.name == "getrandom" && package.name != "xtask" {
+    if dependency.name == "getrandom"
+        && package.name != "xtask"
+        && !rules.classes.runtime_identity.contains(&package.name)
+    {
         violations.push(format!(
             "package `{}` imports getrandom; disposable credential generation belongs to xtask",
             package.name
@@ -1172,6 +1582,43 @@ fn validate_source_boundaries(root: &Path, rules: &DependencyRules) -> Result<Ve
         violations.extend(source_violations(root, &path, &contents, rules));
     }
 
+    for relative in [
+        "crates/platform-migrations/migrations/0001_platform_foundation.sql",
+        "crates/platform-migrations/migrations/0002_platform_message_store.sql",
+        "crates/cell-migrations/migrations/0001_cell_foundation.sql",
+        "crates/cell-migrations/migrations/0002_cell_message_store.sql",
+    ] {
+        if !root.join(relative).is_file() {
+            violations.push(format!(
+                "immutable pre-Checkpoint-4 migration `{relative}` is missing"
+            ));
+        }
+    }
+    for directory in [
+        root.join("crates/platform-migrations/migrations"),
+        root.join("crates/cell-migrations/migrations"),
+    ] {
+        for entry in fs::read_dir(&directory)
+            .with_context(|| format!("could not inspect {}", directory.display()))?
+        {
+            let path = entry?.path();
+            let relative = relative_display(root, &path);
+            if path.is_file()
+                && !matches!(
+                    relative.as_str(),
+                    "crates/platform-migrations/migrations/0001_platform_foundation.sql"
+                        | "crates/platform-migrations/migrations/0002_platform_message_store.sql"
+                        | "crates/cell-migrations/migrations/0001_cell_foundation.sql"
+                        | "crates/cell-migrations/migrations/0002_cell_message_store.sql"
+                )
+            {
+                violations.push(format!(
+                    "Checkpoint 4 introduces forbidden database migration `{relative}`"
+                ));
+            }
+        }
+    }
+
     Ok(violations)
 }
 
@@ -1220,6 +1667,17 @@ fn source_violations(
         contents
     };
     let package = package_name_from_path(root, path);
+    let approved_nats_provider = package.is_some_and(|name| {
+        rules.classes.nats_runtime_provider.contains(name)
+            || rules.classes.nats_admin_provider.contains(name)
+    });
+    let approved_nats_source = approved_nats_provider
+        || rules
+            .classes
+            .transport_qualification_tool
+            .contains(package.unwrap_or_default())
+        || path.starts_with(root.join("infra/local/nats"))
+        || path.starts_with(root.join("tools/xtask"));
 
     if is_rust && !is_test_file {
         for pattern in [
@@ -1246,15 +1704,41 @@ fn source_violations(
         }
     }
 
-    if path.starts_with(root.join("apps")) && production.contains("tokio::spawn") {
+    if is_rust
+        && !matches!(
+            package,
+            Some(
+                "process-lifecycle"
+                    | "postgres-qualification"
+                    | "message-store-qualification"
+                    | "nats-qualification"
+            )
+        )
+        && production.contains("tokio::spawn")
+    {
         violations.push(format!(
-            "application binary source `{relative}` starts a Tokio task directly"
+            "production source `{relative}` starts a Tokio task directly outside process-lifecycle"
+        ));
+    }
+
+    if is_rust
+        && package.is_some_and(|name| {
+            rules.classes.domain.contains(name) || rules.classes.application.contains(name)
+        })
+        && (production.contains("Uuid::now_v7")
+            || production.contains("Uuid::new_v4")
+            || production.contains("uuid::Uuid::now_v7")
+            || production.contains("uuid::Uuid::new_v4"))
+    {
+        violations.push(format!(
+            "domain/application source `{relative}` uses ambient UUID generation"
         ));
     }
 
     let approved_url_location = path.starts_with(root.join("infra/local/postgres"))
         || path.starts_with(root.join("tools/postgres-qualification"))
         || path.starts_with(root.join("tools/message-store-qualification"))
+        || path.starts_with(root.join("tools/nats-qualification"))
         || path.starts_with(root.join("tools/xtask"))
         || is_test_file;
     if !approved_url_location
@@ -1342,11 +1826,40 @@ fn source_violations(
                     line_number + 1
                 ));
             }
+            if !approved_nats_source
+                && normalized.contains("edtech.v1.")
+                && !path.starts_with(root.join("docs"))
+            {
+                violations.push(format!(
+                    "source `{relative}` line {} contains a raw application subject outside an approved transport boundary",
+                    line_number + 1
+                ));
+            }
+            if normalized.contains("format!(")
+                && normalized.contains("tenant")
+                && (normalized.contains("subject") || normalized.contains("edtech.v1."))
+            {
+                violations.push(format!(
+                    "source `{relative}` line {} interpolates a tenant identifier into a subject",
+                    line_number + 1
+                ));
+            }
+            if normalized.contains("format!(")
+                && (normalized.contains("assignment_epoch")
+                    || normalized.contains("assignmentepoch"))
+                && (normalized.contains("subject") || normalized.contains("edtech.v1."))
+            {
+                violations.push(format!(
+                    "source `{relative}` line {} interpolates an assignment epoch into a subject",
+                    line_number + 1
+                ));
+            }
         }
     }
 
     if is_rust
         && (path.starts_with(root.join("apps")) || path.starts_with(root.join("crates")))
+        && !approved_nats_provider
         && ["async_nats", "rdkafka", "lapin", "pulsar"]
             .iter()
             .any(|name| production.contains(name))
@@ -1354,6 +1867,112 @@ fn source_violations(
         violations.push(format!(
             "runtime source `{relative}` contains a forbidden broker SDK or provider name"
         ));
+    }
+
+    if is_rust && !approved_nats_provider && public_api_contains_async_nats(production) {
+        violations.push(format!(
+            "source `{relative}` exposes an async-nats type outside a NATS provider package"
+        ));
+    }
+
+    let runtime_source =
+        path.starts_with(root.join("apps")) || path.starts_with(root.join("crates"));
+    if is_rust && runtime_source && !approved_nats_provider {
+        for token in ["get_or_create_stream", "get_or_create_consumer"] {
+            if production.contains(token) {
+                violations.push(format!(
+                    "runtime source `{relative}` invokes forbidden topology mutation `{token}`"
+                ));
+            }
+        }
+    }
+    if is_rust
+        && matches!(package, Some("platform-worker" | "cell-worker"))
+        && (production.contains(".publish(")
+            || production.contains("publish_with_headers(")
+            || production.contains("jetstream::new("))
+    {
+        violations.push(format!(
+            "worker source `{relative}` performs forbidden direct Core NATS publication"
+        ));
+    }
+    if is_rust && matches!(package, Some("platform-worker" | "cell-worker")) {
+        for token in [
+            "create_stream",
+            "update_stream",
+            "delete_stream",
+            "create_consumer",
+            "update_consumer",
+            "delete_consumer",
+        ] {
+            if production.contains(token) {
+                violations.push(format!(
+                    "worker source `{relative}` performs forbidden topology mutation `{token}`"
+                ));
+            }
+        }
+    }
+
+    if is_rust
+        && package == Some("runtime-config")
+        && production.lines().any(|line| {
+            let normalized = line.trim().to_ascii_lowercase();
+            normalized.starts_with("pub subject:")
+                || normalized.starts_with("subject:")
+                || normalized.starts_with("pub subjects:")
+                || normalized.starts_with("subjects:")
+        })
+    {
+        violations.push(format!(
+            "runtime configuration source `{relative}` accepts arbitrary subject input"
+        ));
+    }
+
+    if production.lines().any(|line| {
+        let normalized = line.to_ascii_lowercase();
+        normalized.contains("nats://") && normalized.contains('@')
+    }) && !is_test_file
+    {
+        violations.push(format!(
+            "production source `{relative}` embeds broker credentials in a NATS URL literal"
+        ));
+    }
+
+    if matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some("yml" | "yaml")
+    ) {
+        for (line_number, line) in contents.lines().enumerate() {
+            let normalized = line.trim().to_ascii_lowercase();
+            if normalized.starts_with("image:")
+                && normalized.contains("nats")
+                && (!normalized.contains("@sha256:")
+                    || normalized.contains(":latest")
+                    || normalized.contains(":alpine@"))
+            {
+                violations.push(format!(
+                    "source `{relative}` line {} uses an unpinned or floating NATS image",
+                    line_number + 1
+                ));
+            }
+        }
+    }
+
+    if path.starts_with(root.join("docs")) {
+        for (line_number, line) in contents.lines().enumerate() {
+            if exactly_once_claim(line) {
+                violations.push(format!(
+                    "documentation `{relative}` line {} makes a forbidden exactly-once claim",
+                    line_number + 1
+                ));
+            }
+            if published_means_consumed_claim(line) {
+                violations.push(format!(
+                    "documentation `{relative}` line {} claims that published means consumed",
+                    line_number + 1
+                ));
+            }
+        }
     }
 
     if path.starts_with(root.join("apps")) && is_rust {
@@ -1499,6 +2118,34 @@ fn public_api_contains_json_value(contents: &str) -> bool {
     false
 }
 
+fn public_api_contains_async_nats(contents: &str) -> bool {
+    let lines = contents.lines().collect::<Vec<_>>();
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with("pub ") {
+            continue;
+        }
+        let end = usize::min(index + 6, lines.len());
+        if lines[index..end].join(" ").contains("async_nats") {
+            return true;
+        }
+    }
+    false
+}
+
+fn published_means_consumed_claim(line: &str) -> bool {
+    let normalized = line.to_ascii_lowercase();
+    let mentions_both = normalized.contains("published")
+        && (normalized.contains("consumed") || normalized.contains("processed"));
+    mentions_both
+        && [" means ", " guarantees ", " is equivalent to "]
+            .iter()
+            .any(|marker| normalized.contains(marker))
+        && !["does not", "not mean", "never", "must not"]
+            .iter()
+            .any(|denial| normalized.contains(denial))
+}
+
 fn relative_display<'a>(root: &'a Path, path: &'a Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
@@ -1534,6 +2181,19 @@ fn smoke(root: &Path) -> Result<()> {
                     "file:/run/secrets/platform-worker-database",
                 ),
                 ("EDTECH__DATABASE__TLS_MODE", "verify_full"),
+                (
+                    "EDTECH__TRANSPORT__SERVERS",
+                    "tls://nats-1:4222,tls://nats-2:4222,tls://nats-3:4222",
+                ),
+                (
+                    "EDTECH__TRANSPORT__CREDENTIAL_REF",
+                    "file:/run/secrets/platform-worker-nats",
+                ),
+                ("EDTECH__TRANSPORT__TLS_MODE", "verify_full"),
+                (
+                    "EDTECH__TRANSPORT__CA_CERTIFICATE_FILE",
+                    "/run/edtech-nats/ca.pem",
+                ),
             ],
         },
         SmokeCase {
@@ -1562,6 +2222,19 @@ fn smoke(root: &Path) -> Result<()> {
                     "file:/run/secrets/cell-worker-database",
                 ),
                 ("EDTECH__DATABASE__TLS_MODE", "verify_full"),
+                (
+                    "EDTECH__TRANSPORT__SERVERS",
+                    "tls://nats-1:4222,tls://nats-2:4222,tls://nats-3:4222",
+                ),
+                (
+                    "EDTECH__TRANSPORT__CREDENTIAL_REF",
+                    "file:/run/secrets/cell-worker-nats",
+                ),
+                ("EDTECH__TRANSPORT__TLS_MODE", "verify_full"),
+                (
+                    "EDTECH__TRANSPORT__CA_CERTIFICATE_FILE",
+                    "/run/edtech-nats/ca.pem",
+                ),
             ],
         },
         SmokeCase {
@@ -1574,6 +2247,29 @@ fn smoke(root: &Path) -> Result<()> {
                     "file:/run/secrets/platform-migrator-database",
                 ),
                 ("EDTECH__DATABASE__TLS_MODE", "verify_full"),
+            ],
+        },
+        SmokeCase {
+            package: "nats-provisioner",
+            environment: &[
+                ("EDTECH__ENVIRONMENT", "npr"),
+                (
+                    "EDTECH__TRANSPORT__SERVERS",
+                    "tls://nats-1:4222,tls://nats-2:4222,tls://nats-3:4222",
+                ),
+                (
+                    "EDTECH__TRANSPORT__CREDENTIAL_REF",
+                    "file:/run/secrets/nats-provisioner",
+                ),
+                ("EDTECH__TRANSPORT__TLS_MODE", "verify_full"),
+                (
+                    "EDTECH__TRANSPORT__CA_CERTIFICATE_FILE",
+                    "/run/edtech-nats/ca.pem",
+                ),
+                (
+                    "EDTECH__TOPOLOGY_FILE",
+                    "infra/local/nats/templates/topology.toml",
+                ),
             ],
         },
         SmokeCase {
@@ -1625,7 +2321,7 @@ fn smoke(root: &Path) -> Result<()> {
         }
     }
 
-    println!("smoke: all seven configuration cases passed");
+    println!("smoke: all eight configuration cases passed");
     Ok(())
 }
 
@@ -1644,7 +2340,7 @@ mod tests {
 
     fn rules() -> DependencyRules {
         DependencyRules {
-            schema_version: 3,
+            schema_version: 4,
             classes: RuleClasses {
                 domain: set(&["tenancy-domain"]),
                 application: set(&["platform-application", "cell-application"]),
@@ -1667,6 +2363,16 @@ mod tests {
                 contract_codec: BTreeSet::new(),
                 message_store_provider: BTreeSet::new(),
                 message_qualification_tool: BTreeSet::new(),
+                runtime_identity: set(&["runtime-identity"]),
+                transport_contract: set(&["transport-probe-contracts"]),
+                nats_runtime_provider: set(&["nats-jetstream"]),
+                nats_admin_provider: set(&["nats-jetstream-admin"]),
+                authority_message_runtime: set(&[
+                    "platform-message-runtime",
+                    "cell-message-runtime",
+                ]),
+                transport_provisioner: set(&["nats-provisioner"]),
+                transport_qualification_tool: set(&["nats-qualification"]),
             },
             forbidden_package_names: set(&["common", "shared", "core", "utils", "helpers", "misc"]),
             allowed_workspace_edges: vec![
@@ -2074,8 +2780,180 @@ mod tests {
         }];
         assert!(has_violation(
             &validate_graph(&graph, &rules),
-            "forbidden broker dependency"
+            "outside the approved NATS provider"
         ));
+    }
+
+    #[test]
+    fn message_domain_importing_async_nats_is_rejected() {
+        let mut rules = rules();
+        rules.classes.domain.insert(String::from("message-domain"));
+        rules
+            .allowed_external_dependencies
+            .push(AllowedExternalDependency {
+                from: String::from("message-domain"),
+                dependency: String::from("async-nats"),
+                kinds: set(&["normal"]),
+            });
+        let graph = [GraphPackage {
+            name: String::from("message-domain"),
+            dependencies: vec![external_dependency("async-nats", "=0.50.0")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "outside the approved NATS provider"
+        ));
+    }
+
+    #[test]
+    fn platform_worker_importing_nats_admin_is_rejected() {
+        let mut rules = rules();
+        rules
+            .classes
+            .platform_binary
+            .insert(String::from("platform-worker"));
+        allow_workspace_edge(&mut rules, "platform-worker", "nats-jetstream-admin");
+        let graph = [GraphPackage {
+            name: String::from("platform-worker"),
+            dependencies: vec![workspace_dependency("nats-jetstream-admin")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "administration provider"
+        ));
+    }
+
+    #[test]
+    fn tenant_router_importing_nats_runtime_is_rejected() {
+        let mut rules = rules();
+        allow_workspace_edge(&mut rules, "tenant-router", "nats-jetstream");
+        let graph = [GraphPackage {
+            name: String::from("tenant-router"),
+            dependencies: vec![workspace_dependency("nats-jetstream")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "tenant-router"
+        ));
+    }
+
+    #[test]
+    fn platform_runtime_importing_cell_provider_is_rejected() {
+        let mut rules = rules();
+        allow_workspace_edge(&mut rules, "platform-message-runtime", "cell-postgres");
+        let graph = [GraphPackage {
+            name: String::from("platform-message-runtime"),
+            dependencies: vec![workspace_dependency("cell-postgres")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "Platform authority runtime"
+        ));
+    }
+
+    #[test]
+    fn cell_runtime_importing_platform_provider_is_rejected() {
+        let mut rules = rules();
+        allow_workspace_edge(&mut rules, "cell-message-runtime", "platform-postgres");
+        let graph = [GraphPackage {
+            name: String::from("cell-message-runtime"),
+            dependencies: vec![workspace_dependency("platform-postgres")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "Cell authority runtime"
+        ));
+    }
+
+    #[test]
+    fn worker_get_or_create_consumer_is_rejected() {
+        let root = Path::new("/workspace");
+        let path = root.join("apps/platform-worker/src/main.rs");
+        let violations = source_violations(
+            root,
+            &path,
+            "fn run() { let _ = context.get_or_create_consumer(); }",
+            &rules(),
+        );
+        assert!(has_violation(&violations, "get_or_create_consumer"));
+    }
+
+    #[test]
+    fn worker_core_nats_publish_is_rejected() {
+        let root = Path::new("/workspace");
+        let path = root.join("apps/cell-worker/src/main.rs");
+        let violations = source_violations(
+            root,
+            &path,
+            "async fn run(client: Client) { client.publish(\"subject\", vec![]).await; }",
+            &rules(),
+        );
+        assert!(has_violation(&violations, "Core NATS publication"));
+    }
+
+    #[test]
+    fn domain_ambient_uuid_v7_is_rejected() {
+        let root = Path::new("/workspace");
+        let path = root.join("crates/tenancy-domain/src/lib.rs");
+        let violations = source_violations(
+            root,
+            &path,
+            "pub fn generate() { let _ = Uuid::now_v7(); }",
+            &rules(),
+        );
+        assert!(has_violation(&violations, "ambient UUID generation"));
+    }
+
+    #[test]
+    fn tenant_identifier_subject_interpolation_is_rejected() {
+        let root = Path::new("/workspace");
+        let path = root.join("crates/nats-jetstream/src/lib.rs");
+        let violations = source_violations(
+            root,
+            &path,
+            "fn subject(tenant_id: &str) { let subject = format!(\"edtech.v1.command.{tenant_id}\"); }",
+            &rules(),
+        );
+        assert!(has_violation(&violations, "tenant identifier"));
+    }
+
+    #[test]
+    fn direct_tokio_spawn_is_rejected() {
+        let root = Path::new("/workspace");
+        let path = root.join("crates/platform-message-runtime/src/lib.rs");
+        let violations = source_violations(
+            root,
+            &path,
+            "pub fn run() { tokio::spawn(async {}); }",
+            &rules(),
+        );
+        assert!(has_violation(&violations, "starts a Tokio task directly"));
+    }
+
+    #[test]
+    fn floating_nats_image_is_rejected() {
+        let root = Path::new("/workspace");
+        let path = root.join("infra/local/nats/compose.yml");
+        let violations = source_violations(
+            root,
+            &path,
+            "services:\n  nats:\n    image: nats:latest\n",
+            &rules(),
+        );
+        assert!(has_violation(&violations, "floating NATS image"));
+    }
+
+    #[test]
+    fn exactly_once_documentation_claim_is_rejected_by_architecture() {
+        let root = Path::new("/workspace");
+        let path = root.join("docs/architecture/transport.md");
+        let violations = source_violations(
+            root,
+            &path,
+            "The runtime guarantees exactly-once processing.\n",
+            &rules(),
+        );
+        assert!(has_violation(&violations, "forbidden exactly-once claim"));
     }
 
     #[test]

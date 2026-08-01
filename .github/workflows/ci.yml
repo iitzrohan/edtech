@@ -20,15 +20,20 @@ jobs:
             - name: Run service-free verification
               run: cargo xtask verify
 
-    postgres:
-        name: Verify PostgreSQL
+    integration:
+        name: Verify PostgreSQL and NATS integration
         runs-on: ubuntu-24.04
-        timeout-minutes: 30
+        timeout-minutes: 60
         steps:
             - name: Check out repository
               uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-            - name: Run disposable PostgreSQL CI profile
-              run: cargo xtask verify-postgres --profile ci
-            - name: Confirm no generated credentials remain
+            - name: Run one disposable combined CI profile
+              run: cargo xtask verify-integration --profile ci
+            - name: Confirm generated state is empty
               if: always()
-              run: test ! -d target/local-postgres || test -z "$(find target/local-postgres -mindepth 1 -maxdepth 1 -print -quit)"
+              run: |
+                  test ! -d target/local-postgres || test -z "$(find target/local-postgres -mindepth 1 -maxdepth 1 -print -quit)"
+                  test ! -d target/local-nats || test -z "$(find target/local-nats -mindepth 1 -maxdepth 1 -print -quit)"
+                  test -z "$(docker ps -aq --filter 'label=com.docker.compose.project.working_dir='$(pwd))"
+                  test -z "$(docker network ls -q --filter 'label=com.docker.compose.project.working_dir='$(pwd))"
+                  test -z "$(docker volume ls -q --filter 'label=com.docker.compose.project.working_dir='$(pwd))"

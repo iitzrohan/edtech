@@ -24,6 +24,24 @@ const DEFAULT_LOCK_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_MAX_LIFETIME_MS: u64 = 1_800_000;
 const DEFAULT_MIGRATION_TIMEOUT_MS: u64 = 600_000;
+const DEFAULT_TRANSPORT_CONNECT_TIMEOUT_MS: u64 = 5_000;
+const DEFAULT_TRANSPORT_REQUEST_TIMEOUT_MS: u64 = 5_000;
+const DEFAULT_PUBLISH_ACK_TIMEOUT_MS: u64 = 5_000;
+const DEFAULT_TRANSPORT_STARTUP_TIMEOUT_MS: u64 = 30_000;
+const DEFAULT_OUTBOX_POLL_INTERVAL_MS: u64 = 100;
+const DEFAULT_OUTBOX_CLAIM_BATCH_SIZE: u16 = 100;
+const DEFAULT_OUTBOX_LEASE_MS: u64 = 30_000;
+const DEFAULT_PUBLISH_CONCURRENCY: u16 = 16;
+const DEFAULT_RETRY_BASE_MS: u64 = 250;
+const DEFAULT_RETRY_MAX_MS: u64 = 30_000;
+const DEFAULT_CONSUMER_FETCH_BATCH_SIZE: u16 = 100;
+const DEFAULT_CONSUMER_FETCH_EXPIRES_MS: u64 = 1_000;
+const DEFAULT_CONSUMER_HANDLER_TIMEOUT_MS: u64 = 20_000;
+const DEFAULT_CONSUMER_NAK_DELAY_MS: u64 = 5_000;
+const DEFAULT_CONSUMER_MAX_IN_FLIGHT: u16 = 64;
+const DEFAULT_TOPOLOGY_APPLY_TIMEOUT_MS: u64 = 30_000;
+const DEFAULT_EXPECTED_SERVER_MINIMUM: &str = "2.14.3";
+const DEFAULT_EXPECTED_SERVER_MAXIMUM_EXCLUSIVE: &str = "2.15.0";
 const MIN_SHUTDOWN_GRACE_MS: u64 = 100;
 const MAX_SHUTDOWN_GRACE_MS: u64 = 300_000;
 const MIN_DATABASE_TIMEOUT_MS: u64 = 100;
@@ -35,6 +53,13 @@ const MAX_MIGRATION_TIMEOUT_MS: u64 = 3_600_000;
 const MAX_DATABASE_CONNECTIONS: u32 = 100;
 const MAX_LOG_FILTER_LENGTH: usize = 256;
 const MAX_SECRET_REFERENCE_LENGTH: usize = 512;
+const MAX_TRANSPORT_SERVERS: usize = 8;
+const MAX_TRANSPORT_SERVER_URL_LENGTH: usize = 320;
+const MAX_TRANSPORT_HOST_LENGTH: usize = 253;
+const MAX_TRANSPORT_PATH_LENGTH: usize = 1_024;
+const MAX_TRANSPORT_TIMEOUT_MS: u64 = 300_000;
+const MIN_TRANSPORT_TIMEOUT_MS: u64 = 100;
+const MAX_CONSUMER_ACK_WAIT_MS: u64 = 30_000;
 
 /// An isolated deployment environment selected at runtime.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -57,7 +82,7 @@ impl fmt::Display for DeploymentEnvironment {
     }
 }
 
-/// One of the six fixed process composition roots.
+/// One of the seven fixed process composition roots.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ServiceKind {
     /// Platform API process.
@@ -72,6 +97,8 @@ pub enum ServiceKind {
     CellWorker,
     /// Separately privileged database migrator process.
     DbMigrator,
+    /// Separately privileged one-shot NATS topology provisioner.
+    NatsProvisioner,
 }
 
 impl ServiceKind {
@@ -85,6 +112,7 @@ impl ServiceKind {
             Self::CellApi => "cell-api",
             Self::CellWorker => "cell-worker",
             Self::DbMigrator => "db-migrator",
+            Self::NatsProvisioner => "nats-provisioner",
         }
     }
 
@@ -315,11 +343,208 @@ impl DatabaseConfig {
     }
 }
 
+/// NATS client TLS verification mode.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum TransportTlsMode {
+    /// Plain NATS transport, accepted only for dev.
+    Disable,
+    /// TLS with a configured CA and full hostname verification.
+    VerifyFull,
+}
+
+/// Bounded worker/provisioner NATS settings with no arbitrary subject input.
+#[derive(Clone, Eq, PartialEq)]
+pub struct TransportConfig {
+    servers: Vec<String>,
+    credential_ref: SecretReference,
+    tls_mode: TransportTlsMode,
+    ca_certificate_file: Option<PathBuf>,
+    connect_timeout: Duration,
+    request_timeout: Duration,
+    publish_ack_timeout: Duration,
+    startup_timeout: Duration,
+    outbox_poll_interval: Duration,
+    outbox_claim_batch_size: u16,
+    outbox_lease: Duration,
+    publish_concurrency: u16,
+    retry_base: Duration,
+    retry_max: Duration,
+    consumer_fetch_batch_size: u16,
+    consumer_fetch_expires: Duration,
+    consumer_handler_timeout: Duration,
+    consumer_nak_delay: Duration,
+    consumer_max_in_flight: u16,
+    expected_server_minimum: String,
+    expected_server_maximum_exclusive: String,
+}
+
+impl TransportConfig {
+    /// Returns validated NATS server URLs. Values must never be logged.
+    #[must_use]
+    pub fn servers(&self) -> &[String] {
+        &self.servers
+    }
+
+    /// Returns the opaque NATS credential reference without resolving it.
+    #[must_use]
+    pub const fn credential_ref(&self) -> &SecretReference {
+        &self.credential_ref
+    }
+
+    /// Returns the validated TLS mode.
+    #[must_use]
+    pub const fn tls_mode(&self) -> TransportTlsMode {
+        self.tls_mode
+    }
+
+    /// Returns the configured CA certificate file path.
+    #[must_use]
+    pub fn ca_certificate_file(&self) -> Option<&PathBuf> {
+        self.ca_certificate_file.as_ref()
+    }
+
+    /// Returns the connection timeout.
+    #[must_use]
+    pub const fn connect_timeout(&self) -> Duration {
+        self.connect_timeout
+    }
+
+    /// Returns the `JetStream` request timeout.
+    #[must_use]
+    pub const fn request_timeout(&self) -> Duration {
+        self.request_timeout
+    }
+
+    /// Returns the bounded publication acknowledgment timeout.
+    #[must_use]
+    pub const fn publish_ack_timeout(&self) -> Duration {
+        self.publish_ack_timeout
+    }
+
+    /// Returns the overall initial transport readiness timeout.
+    #[must_use]
+    pub const fn startup_timeout(&self) -> Duration {
+        self.startup_timeout
+    }
+
+    /// Returns the empty-outbox polling interval.
+    #[must_use]
+    pub const fn outbox_poll_interval(&self) -> Duration {
+        self.outbox_poll_interval
+    }
+
+    /// Returns the bounded outbox claim batch size.
+    #[must_use]
+    pub const fn outbox_claim_batch_size(&self) -> u16 {
+        self.outbox_claim_batch_size
+    }
+
+    /// Returns the whole-second outbox lease duration.
+    #[must_use]
+    pub const fn outbox_lease(&self) -> Duration {
+        self.outbox_lease
+    }
+
+    /// Returns the per-authority publication concurrency.
+    #[must_use]
+    pub const fn publish_concurrency(&self) -> u16 {
+        self.publish_concurrency
+    }
+
+    /// Returns the minimum retry delay.
+    #[must_use]
+    pub const fn retry_base(&self) -> Duration {
+        self.retry_base
+    }
+
+    /// Returns the maximum retry delay.
+    #[must_use]
+    pub const fn retry_max(&self) -> Duration {
+        self.retry_max
+    }
+
+    /// Returns the durable-consumer fetch batch size.
+    #[must_use]
+    pub const fn consumer_fetch_batch_size(&self) -> u16 {
+        self.consumer_fetch_batch_size
+    }
+
+    /// Returns the bounded durable pull request expiry.
+    #[must_use]
+    pub const fn consumer_fetch_expires(&self) -> Duration {
+        self.consumer_fetch_expires
+    }
+
+    /// Returns the local database handler timeout.
+    #[must_use]
+    pub const fn consumer_handler_timeout(&self) -> Duration {
+        self.consumer_handler_timeout
+    }
+
+    /// Returns the bounded poison/stale delivery NAK delay.
+    #[must_use]
+    pub const fn consumer_nak_delay(&self) -> Duration {
+        self.consumer_nak_delay
+    }
+
+    /// Returns the in-task consumer concurrency bound.
+    #[must_use]
+    pub const fn consumer_max_in_flight(&self) -> u16 {
+        self.consumer_max_in_flight
+    }
+
+    /// Returns the inclusive qualified minimum server version.
+    #[must_use]
+    pub fn expected_server_minimum(&self) -> &str {
+        &self.expected_server_minimum
+    }
+
+    /// Returns the exclusive qualified maximum server version.
+    #[must_use]
+    pub fn expected_server_maximum_exclusive(&self) -> &str {
+        &self.expected_server_maximum_exclusive
+    }
+}
+
+impl fmt::Debug for TransportConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TransportConfig")
+            .field("server_count", &self.servers.len())
+            .field("servers", &"[REDACTED ENDPOINTS]")
+            .field("credential_ref", &self.credential_ref)
+            .field("tls_mode", &self.tls_mode)
+            .field("ca_certificate_file", &"[REDACTED PATH]")
+            .field("connect_timeout", &self.connect_timeout)
+            .field("request_timeout", &self.request_timeout)
+            .field("publish_ack_timeout", &self.publish_ack_timeout)
+            .field("startup_timeout", &self.startup_timeout)
+            .field("outbox_poll_interval", &self.outbox_poll_interval)
+            .field("outbox_claim_batch_size", &self.outbox_claim_batch_size)
+            .field("outbox_lease", &self.outbox_lease)
+            .field("publish_concurrency", &self.publish_concurrency)
+            .field("retry_base", &self.retry_base)
+            .field("retry_max", &self.retry_max)
+            .field("consumer_fetch_batch_size", &self.consumer_fetch_batch_size)
+            .field("consumer_fetch_expires", &self.consumer_fetch_expires)
+            .field("consumer_handler_timeout", &self.consumer_handler_timeout)
+            .field("consumer_nak_delay", &self.consumer_nak_delay)
+            .field("consumer_max_in_flight", &self.consumer_max_in_flight)
+            .field("expected_server_minimum", &self.expected_server_minimum)
+            .field(
+                "expected_server_maximum_exclusive",
+                &self.expected_server_maximum_exclusive,
+            )
+            .finish()
+    }
+}
+
 /// Validated configuration for a Platform-authority runtime process.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlatformRuntimeConfig {
     base: BaseRuntimeConfig,
     database: DatabaseConfig,
+    transport: Option<TransportConfig>,
 }
 
 impl PlatformRuntimeConfig {
@@ -333,6 +558,12 @@ impl PlatformRuntimeConfig {
     #[must_use]
     pub const fn database(&self) -> &DatabaseConfig {
         &self.database
+    }
+
+    /// Returns transport settings only for platform-worker.
+    #[must_use]
+    pub const fn transport(&self) -> Option<&TransportConfig> {
+        self.transport.as_ref()
     }
 }
 
@@ -356,6 +587,7 @@ pub struct CellRuntimeConfig {
     base: BaseRuntimeConfig,
     cell_id: CellId,
     database: DatabaseConfig,
+    transport: Option<TransportConfig>,
 }
 
 impl CellRuntimeConfig {
@@ -375,6 +607,47 @@ impl CellRuntimeConfig {
     #[must_use]
     pub const fn database(&self) -> &DatabaseConfig {
         &self.database
+    }
+
+    /// Returns transport settings only for cell-worker.
+    #[must_use]
+    pub const fn transport(&self) -> Option<&TransportConfig> {
+        self.transport.as_ref()
+    }
+}
+
+/// Validated one-shot NATS topology provisioner configuration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NatsProvisionerRuntimeConfig {
+    base: BaseRuntimeConfig,
+    transport: TransportConfig,
+    topology_file: PathBuf,
+    topology_apply_timeout: Duration,
+}
+
+impl NatsProvisionerRuntimeConfig {
+    /// Returns common process settings.
+    #[must_use]
+    pub const fn base(&self) -> &BaseRuntimeConfig {
+        &self.base
+    }
+
+    /// Returns the required NATS connection settings.
+    #[must_use]
+    pub const fn transport(&self) -> &TransportConfig {
+        &self.transport
+    }
+
+    /// Returns the topology manifest path without reading it.
+    #[must_use]
+    pub const fn topology_file(&self) -> &PathBuf {
+        &self.topology_file
+    }
+
+    /// Returns the bounded topology apply/readiness timeout.
+    #[must_use]
+    pub const fn topology_apply_timeout(&self) -> Duration {
+        self.topology_apply_timeout
     }
 }
 
@@ -522,6 +795,32 @@ struct RawDatabaseConfig {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RawTransportConfig {
+    servers: Option<Vec<String>>,
+    credential_ref: Option<String>,
+    tls_mode: Option<String>,
+    ca_certificate_file: Option<String>,
+    connect_timeout_ms: Option<u64>,
+    request_timeout_ms: Option<u64>,
+    publish_ack_timeout_ms: Option<u64>,
+    startup_timeout_ms: Option<u64>,
+    outbox_poll_interval_ms: Option<u64>,
+    outbox_claim_batch_size: Option<u16>,
+    outbox_lease_ms: Option<u64>,
+    publish_concurrency: Option<u16>,
+    retry_base_ms: Option<u64>,
+    retry_max_ms: Option<u64>,
+    consumer_fetch_batch_size: Option<u16>,
+    consumer_fetch_expires_ms: Option<u64>,
+    consumer_handler_timeout_ms: Option<u64>,
+    consumer_nak_delay_ms: Option<u64>,
+    consumer_max_in_flight: Option<u16>,
+    expected_server_minimum: Option<String>,
+    expected_server_maximum_exclusive: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawConfig {
     environment: Option<String>,
     log_filter: Option<String>,
@@ -530,6 +829,9 @@ struct RawConfig {
     migration_scope: Option<String>,
     migration_timeout_ms: Option<u64>,
     database: Option<RawDatabaseConfig>,
+    transport: Option<RawTransportConfig>,
+    topology_file: Option<String>,
+    topology_apply_timeout_ms: Option<u64>,
 }
 
 /// Loads Platform configuration from the real process environment and optional file.
@@ -572,6 +874,16 @@ pub fn load_migrator() -> Result<MigratorRuntimeConfig, RuntimeConfigError> {
     load_migrator_from_sources(&sources)
 }
 
+/// Loads NATS provisioner configuration from the real process environment and optional file.
+///
+/// # Errors
+///
+/// Returns [`RuntimeConfigError`] for missing, unknown, unsafe, or incompatible input.
+pub fn load_nats_provisioner() -> Result<NatsProvisionerRuntimeConfig, RuntimeConfigError> {
+    let sources = process_sources()?;
+    load_nats_provisioner_from_sources(&sources)
+}
+
 /// Loads Platform configuration from explicit, deterministic sources.
 ///
 /// # Errors
@@ -589,12 +901,35 @@ pub fn load_platform_from_sources(
     }
     let raw = deserialize_sources(sources)?;
     reject_migration_fields(&raw)?;
+    reject_provisioner_fields(&raw)?;
     if raw.cell_id.is_some() {
         return Err(RuntimeConfigError::UnexpectedField("cell_id"));
     }
     let base = validate_base(&raw)?;
     let database = validate_database(raw.database.as_ref(), base.environment())?;
-    Ok(PlatformRuntimeConfig { base, database })
+    let transport = match service {
+        ServiceKind::PlatformWorker => Some(validate_transport(
+            raw.transport.as_ref(),
+            base.environment(),
+        )?),
+        ServiceKind::PlatformApi => {
+            if raw.transport.is_some() {
+                return Err(RuntimeConfigError::UnexpectedField("transport"));
+            }
+            None
+        }
+        _ => {
+            return Err(RuntimeConfigError::ServiceMismatch {
+                service,
+                configuration_kind: "Platform",
+            });
+        }
+    };
+    Ok(PlatformRuntimeConfig {
+        base,
+        database,
+        transport,
+    })
 }
 
 /// Loads database-free tenant-router configuration from explicit, deterministic sources.
@@ -607,11 +942,15 @@ pub fn load_router_from_sources(
 ) -> Result<RouterRuntimeConfig, RuntimeConfigError> {
     let raw = deserialize_sources(sources)?;
     reject_migration_fields(&raw)?;
+    reject_provisioner_fields(&raw)?;
     if raw.cell_id.is_some() {
         return Err(RuntimeConfigError::UnexpectedField("cell_id"));
     }
     if raw.database.is_some() {
         return Err(RuntimeConfigError::UnexpectedField("database"));
+    }
+    if raw.transport.is_some() {
+        return Err(RuntimeConfigError::UnexpectedField("transport"));
     }
     Ok(RouterRuntimeConfig {
         base: validate_base(&raw)?,
@@ -635,13 +974,33 @@ pub fn load_cell_from_sources(
     }
     let raw = deserialize_sources(sources)?;
     reject_migration_fields(&raw)?;
+    reject_provisioner_fields(&raw)?;
     let cell_id = validate_cell_id(raw.cell_id.as_deref())?;
     let base = validate_base(&raw)?;
     let database = validate_database(raw.database.as_ref(), base.environment())?;
+    let transport = match service {
+        ServiceKind::CellWorker => Some(validate_transport(
+            raw.transport.as_ref(),
+            base.environment(),
+        )?),
+        ServiceKind::CellApi => {
+            if raw.transport.is_some() {
+                return Err(RuntimeConfigError::UnexpectedField("transport"));
+            }
+            None
+        }
+        _ => {
+            return Err(RuntimeConfigError::ServiceMismatch {
+                service,
+                configuration_kind: "Cell",
+            });
+        }
+    };
     Ok(CellRuntimeConfig {
         base,
         cell_id,
         database,
+        transport,
     })
 }
 
@@ -654,6 +1013,10 @@ pub fn load_migrator_from_sources(
     sources: &ConfigSources,
 ) -> Result<MigratorRuntimeConfig, RuntimeConfigError> {
     let raw = deserialize_sources(sources)?;
+    if raw.transport.is_some() {
+        return Err(RuntimeConfigError::UnexpectedField("transport"));
+    }
+    reject_provisioner_fields(&raw)?;
     let scope = match raw.migration_scope.as_deref() {
         Some("platform") => MigrationScope::Platform,
         Some("cell") => MigrationScope::Cell,
@@ -698,12 +1061,59 @@ pub fn load_migrator_from_sources(
     })
 }
 
+/// Loads NATS provisioner configuration from explicit deterministic sources.
+///
+/// # Errors
+///
+/// Rejects database/Cell/migration fields and requires strict transport and topology settings.
+pub fn load_nats_provisioner_from_sources(
+    sources: &ConfigSources,
+) -> Result<NatsProvisionerRuntimeConfig, RuntimeConfigError> {
+    let raw = deserialize_sources(sources)?;
+    reject_migration_fields(&raw)?;
+    if raw.database.is_some() {
+        return Err(RuntimeConfigError::UnexpectedField("database"));
+    }
+    if raw.cell_id.is_some() {
+        return Err(RuntimeConfigError::UnexpectedField("cell_id"));
+    }
+    let base = validate_base(&raw)?;
+    let transport = validate_transport(raw.transport.as_ref(), base.environment())?;
+    let topology_file = raw
+        .topology_file
+        .as_deref()
+        .ok_or(RuntimeConfigError::MissingField("topology_file"))
+        .and_then(|value| validate_configuration_path(value, "topology_file"))?;
+    let timeout_ms = raw
+        .topology_apply_timeout_ms
+        .unwrap_or(DEFAULT_TOPOLOGY_APPLY_TIMEOUT_MS);
+    let topology_apply_timeout = transport_timeout(timeout_ms, "topology_apply_timeout_ms")?;
+    Ok(NatsProvisionerRuntimeConfig {
+        base,
+        transport,
+        topology_file,
+        topology_apply_timeout,
+    })
+}
+
 fn reject_migration_fields(raw: &RawConfig) -> Result<(), RuntimeConfigError> {
     if raw.migration_scope.is_some() {
         return Err(RuntimeConfigError::UnexpectedField("migration_scope"));
     }
     if raw.migration_timeout_ms.is_some() {
         return Err(RuntimeConfigError::UnexpectedField("migration_timeout_ms"));
+    }
+    Ok(())
+}
+
+fn reject_provisioner_fields(raw: &RawConfig) -> Result<(), RuntimeConfigError> {
+    if raw.topology_file.is_some() {
+        return Err(RuntimeConfigError::UnexpectedField("topology_file"));
+    }
+    if raw.topology_apply_timeout_ms.is_some() {
+        return Err(RuntimeConfigError::UnexpectedField(
+            "topology_apply_timeout_ms",
+        ));
     }
     Ok(())
 }
@@ -741,6 +1151,7 @@ fn process_sources() -> Result<ConfigSources, RuntimeConfigError> {
     Ok(sources)
 }
 
+#[allow(clippy::too_many_lines)]
 fn deserialize_sources(sources: &ConfigSources) -> Result<RawConfig, RuntimeConfigError> {
     if !sources.environment.contains_key("EDTECH__ENVIRONMENT") {
         return Err(RuntimeConfigError::MissingField("environment"));
@@ -766,18 +1177,42 @@ fn deserialize_sources(sources: &ConfigSources) -> Result<RawConfig, RuntimeConf
             | "log_filter"
             | "cell_id"
             | "migration_scope"
+            | "topology_file"
             | "database__credential_ref"
-            | "database__tls_mode" => builder
+            | "database__tls_mode"
+            | "transport__credential_ref"
+            | "transport__tls_mode"
+            | "transport__ca_certificate_file"
+            | "transport__expected_server_minimum"
+            | "transport__expected_server_maximum_exclusive" => builder
                 .set_override(field.replace("__", "."), value.clone())
                 .map_err(|_| RuntimeConfigError::InvalidSource)?,
+            "transport__servers" => {
+                let servers = parse_environment_servers(value)?;
+                builder
+                    .set_override(field.replace("__", "."), servers)
+                    .map_err(|_| RuntimeConfigError::InvalidSource)?
+            }
             "shutdown_grace_ms"
             | "migration_timeout_ms"
+            | "topology_apply_timeout_ms"
             | "database__acquire_timeout_ms"
             | "database__connect_timeout_ms"
             | "database__statement_timeout_ms"
             | "database__lock_timeout_ms"
             | "database__idle_in_transaction_timeout_ms"
-            | "database__max_lifetime_ms" => {
+            | "database__max_lifetime_ms"
+            | "transport__connect_timeout_ms"
+            | "transport__request_timeout_ms"
+            | "transport__publish_ack_timeout_ms"
+            | "transport__startup_timeout_ms"
+            | "transport__outbox_poll_interval_ms"
+            | "transport__outbox_lease_ms"
+            | "transport__retry_base_ms"
+            | "transport__retry_max_ms"
+            | "transport__consumer_fetch_expires_ms"
+            | "transport__consumer_handler_timeout_ms"
+            | "transport__consumer_nak_delay_ms" => {
                 let number =
                     value
                         .parse::<u64>()
@@ -801,6 +1236,21 @@ fn deserialize_sources(sources: &ConfigSources) -> Result<RawConfig, RuntimeConf
                     .set_override(field.replace("__", "."), number)
                     .map_err(|_| RuntimeConfigError::InvalidSource)?
             }
+            "transport__outbox_claim_batch_size"
+            | "transport__publish_concurrency"
+            | "transport__consumer_fetch_batch_size"
+            | "transport__consumer_max_in_flight" => {
+                let number =
+                    value
+                        .parse::<u16>()
+                        .map_err(|_| RuntimeConfigError::InvalidField {
+                            field: numeric_field_name(field.as_str()),
+                            reason: "must be an unsigned integer no greater than 65535",
+                        })?;
+                builder
+                    .set_override(field.replace("__", "."), number)
+                    .map_err(|_| RuntimeConfigError::InvalidSource)?
+            }
             _ => return Err(RuntimeConfigError::UnknownField(field.replace("__", "."))),
         };
     }
@@ -811,10 +1261,26 @@ fn deserialize_sources(sources: &ConfigSources) -> Result<RawConfig, RuntimeConf
         .map_err(|_| RuntimeConfigError::InvalidSource)
 }
 
+fn parse_environment_servers(value: &str) -> Result<Vec<String>, RuntimeConfigError> {
+    let servers = value
+        .split(',')
+        .map(str::trim)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if servers.iter().any(String::is_empty) {
+        return Err(RuntimeConfigError::InvalidField {
+            field: "transport.servers",
+            reason: "must be a non-empty comma-separated server list",
+        });
+    }
+    Ok(servers)
+}
+
 fn numeric_field_name(field: &str) -> &'static str {
     match field {
         "shutdown_grace_ms" => "shutdown_grace_ms",
         "migration_timeout_ms" => "migration_timeout_ms",
+        "topology_apply_timeout_ms" => "topology_apply_timeout_ms",
         "database__max_connections" => "database.max_connections",
         "database__min_connections" => "database.min_connections",
         "database__acquire_timeout_ms" => "database.acquire_timeout_ms",
@@ -823,6 +1289,21 @@ fn numeric_field_name(field: &str) -> &'static str {
         "database__lock_timeout_ms" => "database.lock_timeout_ms",
         "database__idle_in_transaction_timeout_ms" => "database.idle_in_transaction_timeout_ms",
         "database__max_lifetime_ms" => "database.max_lifetime_ms",
+        "transport__connect_timeout_ms" => "transport.connect_timeout_ms",
+        "transport__request_timeout_ms" => "transport.request_timeout_ms",
+        "transport__publish_ack_timeout_ms" => "transport.publish_ack_timeout_ms",
+        "transport__startup_timeout_ms" => "transport.startup_timeout_ms",
+        "transport__outbox_poll_interval_ms" => "transport.outbox_poll_interval_ms",
+        "transport__outbox_claim_batch_size" => "transport.outbox_claim_batch_size",
+        "transport__outbox_lease_ms" => "transport.outbox_lease_ms",
+        "transport__publish_concurrency" => "transport.publish_concurrency",
+        "transport__retry_base_ms" => "transport.retry_base_ms",
+        "transport__retry_max_ms" => "transport.retry_max_ms",
+        "transport__consumer_fetch_batch_size" => "transport.consumer_fetch_batch_size",
+        "transport__consumer_fetch_expires_ms" => "transport.consumer_fetch_expires_ms",
+        "transport__consumer_handler_timeout_ms" => "transport.consumer_handler_timeout_ms",
+        "transport__consumer_nak_delay_ms" => "transport.consumer_nak_delay_ms",
+        "transport__consumer_max_in_flight" => "transport.consumer_max_in_flight",
         _ => "numeric configuration",
     }
 }
@@ -952,6 +1433,335 @@ fn validate_database(
     })
 }
 
+#[allow(clippy::too_many_lines)]
+fn validate_transport(
+    raw: Option<&RawTransportConfig>,
+    environment: DeploymentEnvironment,
+) -> Result<TransportConfig, RuntimeConfigError> {
+    let raw = raw.ok_or(RuntimeConfigError::MissingField("transport"))?;
+    let tls_mode = match raw.tls_mode.as_deref().unwrap_or("verify_full") {
+        "disable" => TransportTlsMode::Disable,
+        "verify_full" => TransportTlsMode::VerifyFull,
+        _ => {
+            return Err(RuntimeConfigError::InvalidField {
+                field: "transport.tls_mode",
+                reason: "must be `disable` or `verify_full`",
+            });
+        }
+    };
+    if tls_mode == TransportTlsMode::Disable && environment != DeploymentEnvironment::Dev {
+        return Err(RuntimeConfigError::InvalidField {
+            field: "transport.tls_mode",
+            reason: "must be `verify_full` outside the dev environment",
+        });
+    }
+
+    let servers = raw
+        .servers
+        .as_ref()
+        .ok_or(RuntimeConfigError::MissingField("transport.servers"))?;
+    if !(1..=MAX_TRANSPORT_SERVERS).contains(&servers.len()) {
+        return Err(RuntimeConfigError::InvalidField {
+            field: "transport.servers",
+            reason: "must contain between 1 and 8 server URLs",
+        });
+    }
+    let mut unique_servers = std::collections::BTreeSet::new();
+    for server in servers {
+        validate_transport_server(server, tls_mode)?;
+        if !unique_servers.insert(server) {
+            return Err(RuntimeConfigError::InvalidField {
+                field: "transport.servers",
+                reason: "must not contain duplicate server URLs",
+            });
+        }
+    }
+
+    let credential_ref = raw
+        .credential_ref
+        .as_deref()
+        .ok_or(RuntimeConfigError::MissingField("transport.credential_ref"))?
+        .parse::<SecretReference>()
+        .map_err(|_| RuntimeConfigError::InvalidField {
+            field: "transport.credential_ref",
+            reason: "must be a bounded opaque secret reference",
+        })?;
+    let ca_certificate_file = match (tls_mode, raw.ca_certificate_file.as_deref()) {
+        (TransportTlsMode::VerifyFull, Some(value)) => Some(validate_configuration_path(
+            value,
+            "transport.ca_certificate_file",
+        )?),
+        (TransportTlsMode::VerifyFull, None) => {
+            return Err(RuntimeConfigError::MissingField(
+                "transport.ca_certificate_file",
+            ));
+        }
+        (TransportTlsMode::Disable, Some(_)) => {
+            return Err(RuntimeConfigError::UnexpectedField(
+                "transport.ca_certificate_file",
+            ));
+        }
+        (TransportTlsMode::Disable, None) => None,
+    };
+
+    let connect_timeout = transport_timeout(
+        raw.connect_timeout_ms
+            .unwrap_or(DEFAULT_TRANSPORT_CONNECT_TIMEOUT_MS),
+        "transport.connect_timeout_ms",
+    )?;
+    let request_timeout = transport_timeout(
+        raw.request_timeout_ms
+            .unwrap_or(DEFAULT_TRANSPORT_REQUEST_TIMEOUT_MS),
+        "transport.request_timeout_ms",
+    )?;
+    let publish_ack_timeout = transport_timeout(
+        raw.publish_ack_timeout_ms
+            .unwrap_or(DEFAULT_PUBLISH_ACK_TIMEOUT_MS),
+        "transport.publish_ack_timeout_ms",
+    )?;
+    let startup_timeout = transport_timeout(
+        raw.startup_timeout_ms
+            .unwrap_or(DEFAULT_TRANSPORT_STARTUP_TIMEOUT_MS),
+        "transport.startup_timeout_ms",
+    )?;
+    if startup_timeout < connect_timeout {
+        return Err(RuntimeConfigError::InvalidField {
+            field: "transport.startup_timeout_ms",
+            reason: "must be greater than or equal to transport.connect_timeout_ms",
+        });
+    }
+
+    let outbox_poll_interval = positive_transport_interval(
+        raw.outbox_poll_interval_ms
+            .unwrap_or(DEFAULT_OUTBOX_POLL_INTERVAL_MS),
+        "transport.outbox_poll_interval_ms",
+    )?;
+    let outbox_claim_batch_size = raw
+        .outbox_claim_batch_size
+        .unwrap_or(DEFAULT_OUTBOX_CLAIM_BATCH_SIZE);
+    validate_u16_range(
+        outbox_claim_batch_size,
+        1,
+        500,
+        "transport.outbox_claim_batch_size",
+        "must be between 1 and 500",
+    )?;
+    let outbox_lease_ms = raw.outbox_lease_ms.unwrap_or(DEFAULT_OUTBOX_LEASE_MS);
+    if !(1_000..=300_000).contains(&outbox_lease_ms) || outbox_lease_ms % 1_000 != 0 {
+        return Err(RuntimeConfigError::InvalidField {
+            field: "transport.outbox_lease_ms",
+            reason: "must be between 1000 and 300000 whole milliseconds in one-second increments",
+        });
+    }
+    if u128::from(outbox_lease_ms) <= publish_ack_timeout.as_millis() {
+        return Err(RuntimeConfigError::InvalidField {
+            field: "transport.outbox_lease_ms",
+            reason: "must exceed the maximum configured publish acknowledgment window",
+        });
+    }
+    let publish_concurrency = raw
+        .publish_concurrency
+        .unwrap_or(DEFAULT_PUBLISH_CONCURRENCY);
+    validate_u16_range(
+        publish_concurrency,
+        1,
+        128,
+        "transport.publish_concurrency",
+        "must be between 1 and 128",
+    )?;
+
+    let retry_base_ms = raw.retry_base_ms.unwrap_or(DEFAULT_RETRY_BASE_MS);
+    let retry_max_ms = raw.retry_max_ms.unwrap_or(DEFAULT_RETRY_MAX_MS);
+    if retry_base_ms == 0 || retry_base_ms > MAX_TRANSPORT_TIMEOUT_MS {
+        return Err(RuntimeConfigError::InvalidField {
+            field: "transport.retry_base_ms",
+            reason: "must be between 1 and 300000 milliseconds",
+        });
+    }
+    if !(retry_base_ms..=MAX_TRANSPORT_TIMEOUT_MS).contains(&retry_max_ms) {
+        return Err(RuntimeConfigError::InvalidField {
+            field: "transport.retry_max_ms",
+            reason: "must be at least retry_base_ms and no greater than 300000 milliseconds",
+        });
+    }
+
+    let consumer_fetch_batch_size = raw
+        .consumer_fetch_batch_size
+        .unwrap_or(DEFAULT_CONSUMER_FETCH_BATCH_SIZE);
+    validate_u16_range(
+        consumer_fetch_batch_size,
+        1,
+        500,
+        "transport.consumer_fetch_batch_size",
+        "must be between 1 and 500",
+    )?;
+    let consumer_fetch_expires = positive_transport_interval(
+        raw.consumer_fetch_expires_ms
+            .unwrap_or(DEFAULT_CONSUMER_FETCH_EXPIRES_MS),
+        "transport.consumer_fetch_expires_ms",
+    )?;
+    let handler_timeout_ms = raw
+        .consumer_handler_timeout_ms
+        .unwrap_or(DEFAULT_CONSUMER_HANDLER_TIMEOUT_MS);
+    if handler_timeout_ms == 0 || handler_timeout_ms >= MAX_CONSUMER_ACK_WAIT_MS {
+        return Err(RuntimeConfigError::InvalidField {
+            field: "transport.consumer_handler_timeout_ms",
+            reason: "must be positive and strictly less than the 30000 millisecond AckWait",
+        });
+    }
+    let consumer_nak_delay = positive_transport_interval(
+        raw.consumer_nak_delay_ms
+            .unwrap_or(DEFAULT_CONSUMER_NAK_DELAY_MS),
+        "transport.consumer_nak_delay_ms",
+    )?;
+    let consumer_max_in_flight = raw
+        .consumer_max_in_flight
+        .unwrap_or(DEFAULT_CONSUMER_MAX_IN_FLIGHT);
+    validate_u16_range(
+        consumer_max_in_flight,
+        1,
+        1_024,
+        "transport.consumer_max_in_flight",
+        "must be between 1 and 1024",
+    )?;
+
+    let expected_server_minimum = raw
+        .expected_server_minimum
+        .as_deref()
+        .unwrap_or(DEFAULT_EXPECTED_SERVER_MINIMUM);
+    let expected_server_maximum_exclusive = raw
+        .expected_server_maximum_exclusive
+        .as_deref()
+        .unwrap_or(DEFAULT_EXPECTED_SERVER_MAXIMUM_EXCLUSIVE);
+    if expected_server_minimum != DEFAULT_EXPECTED_SERVER_MINIMUM {
+        return Err(RuntimeConfigError::InvalidField {
+            field: "transport.expected_server_minimum",
+            reason: "must match the qualified minimum server version",
+        });
+    }
+    if expected_server_maximum_exclusive != DEFAULT_EXPECTED_SERVER_MAXIMUM_EXCLUSIVE {
+        return Err(RuntimeConfigError::InvalidField {
+            field: "transport.expected_server_maximum_exclusive",
+            reason: "must match the qualified exclusive maximum server version",
+        });
+    }
+
+    Ok(TransportConfig {
+        servers: servers.clone(),
+        credential_ref,
+        tls_mode,
+        ca_certificate_file,
+        connect_timeout,
+        request_timeout,
+        publish_ack_timeout,
+        startup_timeout,
+        outbox_poll_interval,
+        outbox_claim_batch_size,
+        outbox_lease: Duration::from_millis(outbox_lease_ms),
+        publish_concurrency,
+        retry_base: Duration::from_millis(retry_base_ms),
+        retry_max: Duration::from_millis(retry_max_ms),
+        consumer_fetch_batch_size,
+        consumer_fetch_expires,
+        consumer_handler_timeout: Duration::from_millis(handler_timeout_ms),
+        consumer_nak_delay,
+        consumer_max_in_flight,
+        expected_server_minimum: expected_server_minimum.to_owned(),
+        expected_server_maximum_exclusive: expected_server_maximum_exclusive.to_owned(),
+    })
+}
+
+fn validate_transport_server(
+    value: &str,
+    tls_mode: TransportTlsMode,
+) -> Result<(), RuntimeConfigError> {
+    let invalid = || RuntimeConfigError::InvalidField {
+        field: "transport.servers",
+        reason: "must contain bounded nats:// or tls:// host:port URLs without credentials, paths, queries, or fragments",
+    };
+    if !(1..=MAX_TRANSPORT_SERVER_URL_LENGTH).contains(&value.len())
+        || !value.is_ascii()
+        || value.contains(['@', '?', '#'])
+    {
+        return Err(invalid());
+    }
+    let (scheme, authority) = value.split_once("://").ok_or_else(invalid)?;
+    if authority.contains(['/', '?', '#', '@'])
+        || !matches!(scheme, "nats" | "tls")
+        || (tls_mode == TransportTlsMode::VerifyFull && scheme != "tls")
+        || (tls_mode == TransportTlsMode::Disable && scheme != "nats")
+    {
+        return Err(invalid());
+    }
+    let (host, port) = authority.rsplit_once(':').ok_or_else(invalid)?;
+    if !(1..=MAX_TRANSPORT_HOST_LENGTH).contains(&host.len())
+        || host.chars().any(char::is_whitespace)
+        || port
+            .parse::<u16>()
+            .ok()
+            .as_ref()
+            .is_none_or(|number| *number == 0)
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+fn validate_configuration_path(
+    value: &str,
+    field: &'static str,
+) -> Result<PathBuf, RuntimeConfigError> {
+    if value.is_empty()
+        || value.len() > MAX_TRANSPORT_PATH_LENGTH
+        || value.chars().any(char::is_control)
+    {
+        return Err(RuntimeConfigError::InvalidField {
+            field,
+            reason: "must be a bounded non-empty path without control characters",
+        });
+    }
+    Ok(PathBuf::from(value))
+}
+
+fn transport_timeout(
+    milliseconds: u64,
+    field: &'static str,
+) -> Result<Duration, RuntimeConfigError> {
+    if !(MIN_TRANSPORT_TIMEOUT_MS..=MAX_TRANSPORT_TIMEOUT_MS).contains(&milliseconds) {
+        return Err(RuntimeConfigError::InvalidField {
+            field,
+            reason: "must be between 100 and 300000 milliseconds",
+        });
+    }
+    Ok(Duration::from_millis(milliseconds))
+}
+
+fn positive_transport_interval(
+    milliseconds: u64,
+    field: &'static str,
+) -> Result<Duration, RuntimeConfigError> {
+    if !(1..=MAX_TRANSPORT_TIMEOUT_MS).contains(&milliseconds) {
+        return Err(RuntimeConfigError::InvalidField {
+            field,
+            reason: "must be between 1 and 300000 milliseconds",
+        });
+    }
+    Ok(Duration::from_millis(milliseconds))
+}
+
+fn validate_u16_range(
+    value: u16,
+    minimum: u16,
+    maximum: u16,
+    field: &'static str,
+    reason: &'static str,
+) -> Result<(), RuntimeConfigError> {
+    if !(minimum..=maximum).contains(&value) {
+        return Err(RuntimeConfigError::InvalidField { field, reason });
+    }
+    Ok(())
+}
+
 fn database_timeout(
     milliseconds: u64,
     field: &'static str,
@@ -971,8 +1781,9 @@ mod tests {
 
     use super::{
         ConfigSources, DatabaseTlsMode, DeploymentEnvironment, MigrationScope, RuntimeConfigError,
-        SecretReference, ServiceKind, load_cell_from_sources, load_migrator_from_sources,
-        load_platform_from_sources, load_router_from_sources,
+        SecretReference, ServiceKind, TransportTlsMode, load_cell_from_sources,
+        load_migrator_from_sources, load_nats_provisioner_from_sources, load_platform_from_sources,
+        load_router_from_sources,
     };
 
     fn source(entries: &[(&str, &str)]) -> ConfigSources {
@@ -1008,6 +1819,39 @@ mod tests {
         ]
     }
 
+    fn transport_entries(environment: &str) -> Vec<(&'static str, &'static str)> {
+        let verify_full = environment != "dev";
+        let mut entries = vec![
+            (
+                "EDTECH__TRANSPORT__SERVERS",
+                if verify_full {
+                    "tls://nats-1:4222,tls://nats-2:4222,tls://nats-3:4222"
+                } else {
+                    "nats://nats-1:4222,nats://nats-2:4222,nats://nats-3:4222"
+                },
+            ),
+            (
+                "EDTECH__TRANSPORT__CREDENTIAL_REF",
+                "file:/run/secrets/edtech-nats",
+            ),
+            (
+                "EDTECH__TRANSPORT__TLS_MODE",
+                if verify_full {
+                    "verify_full"
+                } else {
+                    "disable"
+                },
+            ),
+        ];
+        if verify_full {
+            entries.push((
+                "EDTECH__TRANSPORT__CA_CERTIFICATE_FILE",
+                "/run/edtech-nats/ca.pem",
+            ));
+        }
+        entries
+    }
+
     #[test]
     fn every_service_environment_combination_obeys_database_scope() {
         for (environment, expected) in [
@@ -1016,23 +1860,44 @@ mod tests {
             ("prd", DeploymentEnvironment::Prd),
         ] {
             let entries = database_entries(environment);
-            for service in [ServiceKind::PlatformApi, ServiceKind::PlatformWorker] {
-                let config = load_platform_from_sources(service, &source(&entries));
-                assert_eq!(
-                    config.ok().map(|item| item.base().environment()),
-                    Some(expected)
-                );
-            }
+            let platform_api =
+                load_platform_from_sources(ServiceKind::PlatformApi, &source(&entries));
+            assert_eq!(
+                platform_api.ok().map(|item| item.base().environment()),
+                Some(expected)
+            );
+            let mut worker_entries = entries.clone();
+            worker_entries.extend(transport_entries(environment));
+            let platform_worker =
+                load_platform_from_sources(ServiceKind::PlatformWorker, &source(&worker_entries));
+            assert_eq!(
+                platform_worker
+                    .as_ref()
+                    .ok()
+                    .map(|item| item.base().environment()),
+                Some(expected)
+            );
+            assert!(
+                platform_worker
+                    .ok()
+                    .and_then(|item| item.transport)
+                    .is_some()
+            );
 
             let mut cell_entries = entries.clone();
             cell_entries.push(("EDTECH__CELL_ID", "cell-001"));
-            for service in [ServiceKind::CellApi, ServiceKind::CellWorker] {
-                let config = load_cell_from_sources(service, &source(&cell_entries));
-                assert_eq!(
-                    config.ok().map(|item| item.base().environment()),
-                    Some(expected)
-                );
-            }
+            let cell_api = load_cell_from_sources(ServiceKind::CellApi, &source(&cell_entries));
+            assert_eq!(
+                cell_api.ok().map(|item| item.base().environment()),
+                Some(expected)
+            );
+            cell_entries.extend(transport_entries(environment));
+            let cell_worker =
+                load_cell_from_sources(ServiceKind::CellWorker, &source(&cell_entries));
+            assert_eq!(
+                cell_worker.ok().map(|item| item.base().environment()),
+                Some(expected)
+            );
 
             let router = load_router_from_sources(&source(&[("EDTECH__ENVIRONMENT", environment)]));
             assert_eq!(
@@ -1040,6 +1905,123 @@ mod tests {
                 Some(expected)
             );
         }
+    }
+
+    #[test]
+    fn transport_scope_tls_and_bounds_are_enforced_without_exposing_values() {
+        let sentinel = "nats://private-user:private-password@private.example:4222";
+        for service in [ServiceKind::PlatformApi, ServiceKind::PlatformWorker] {
+            let mut entries = database_entries("dev");
+            entries.extend(transport_entries("dev"));
+            if service == ServiceKind::PlatformWorker {
+                entries.retain(|(key, _)| *key != "EDTECH__TRANSPORT__SERVERS");
+                entries.push(("EDTECH__TRANSPORT__SERVERS", sentinel));
+            }
+            let rendered = load_platform_from_sources(service, &source(&entries))
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_default();
+            assert!(!rendered.contains("private-user"));
+            assert!(!rendered.contains("private-password"));
+            assert!(if service == ServiceKind::PlatformApi {
+                rendered.contains("not valid for this service")
+            } else {
+                rendered.contains("transport.servers")
+            });
+        }
+
+        let mut npr_entries = database_entries("npr");
+        npr_entries.extend(transport_entries("dev"));
+        assert!(matches!(
+            load_platform_from_sources(ServiceKind::PlatformWorker, &source(&npr_entries)),
+            Err(RuntimeConfigError::InvalidField {
+                field: "transport.tls_mode",
+                ..
+            })
+        ));
+
+        let mut bounded = database_entries("dev");
+        bounded.extend(transport_entries("dev"));
+        bounded.push(("EDTECH__TRANSPORT__OUTBOX_CLAIM_BATCH_SIZE", "501"));
+        assert!(matches!(
+            load_platform_from_sources(ServiceKind::PlatformWorker, &source(&bounded)),
+            Err(RuntimeConfigError::InvalidField {
+                field: "transport.outbox_claim_batch_size",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn transport_timing_invariants_and_redaction_are_deterministic() {
+        let cases = [
+            (
+                "EDTECH__TRANSPORT__CONSUMER_HANDLER_TIMEOUT_MS",
+                "30000",
+                "transport.consumer_handler_timeout_ms",
+            ),
+            (
+                "EDTECH__TRANSPORT__OUTBOX_LEASE_MS",
+                "5000",
+                "transport.outbox_lease_ms",
+            ),
+            (
+                "EDTECH__TRANSPORT__RETRY_BASE_MS",
+                "0",
+                "transport.retry_base_ms",
+            ),
+        ];
+        for (key, value, expected_field) in cases {
+            let mut entries = database_entries("dev");
+            entries.extend(transport_entries("dev"));
+            entries.push((key, value));
+            assert!(matches!(
+                load_platform_from_sources(ServiceKind::PlatformWorker, &source(&entries)),
+                Err(RuntimeConfigError::InvalidField { field, .. }) if field == expected_field
+            ));
+        }
+
+        let mut entries = database_entries("dev");
+        entries.extend(transport_entries("dev"));
+        let config = load_platform_from_sources(ServiceKind::PlatformWorker, &source(&entries));
+        assert_eq!(
+            config
+                .as_ref()
+                .ok()
+                .and_then(|item| item.transport())
+                .map(super::TransportConfig::tls_mode),
+            Some(TransportTlsMode::Disable)
+        );
+        let rendered = format!("{config:?}");
+        assert!(!rendered.contains("nats-1"));
+        assert!(!rendered.contains("/run/secrets/edtech-nats"));
+    }
+
+    #[test]
+    fn nats_provisioner_has_only_transport_and_topology_configuration() {
+        for environment in ["dev", "npr", "prd"] {
+            let mut entries = vec![("EDTECH__ENVIRONMENT", environment)];
+            entries.extend(transport_entries(environment));
+            entries.push(("EDTECH__TOPOLOGY_FILE", "/run/edtech-nats/topology.toml"));
+            let config = load_nats_provisioner_from_sources(&source(&entries));
+            assert_eq!(
+                config.ok().map(|item| item.base().environment()),
+                Some(match environment {
+                    "dev" => DeploymentEnvironment::Dev,
+                    "npr" => DeploymentEnvironment::Npr,
+                    _ => DeploymentEnvironment::Prd,
+                })
+            );
+        }
+
+        let mut with_database = vec![("EDTECH__ENVIRONMENT", "dev")];
+        with_database.extend(transport_entries("dev"));
+        with_database.extend(database_entries("dev"));
+        with_database.push(("EDTECH__TOPOLOGY_FILE", "/tmp/topology.toml"));
+        assert!(matches!(
+            load_nats_provisioner_from_sources(&source(&with_database)),
+            Err(RuntimeConfigError::UnexpectedField("database"))
+        ));
     }
 
     #[test]

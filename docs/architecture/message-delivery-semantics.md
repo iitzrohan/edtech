@@ -8,8 +8,8 @@ future dead-letter queue never become business authority. No exactly-once delive
 
 A producer commits its local state and exact immutable outbox message in one authority-local
 PostgreSQL transaction. Failure of either effect rolls back both. An outbox row means a committed
-message awaits future publication. A published timestamp will mean only that a future transport
-accepted the message; it will not prove consumer handling.
+message awaits publication. A published timestamp means only that JetStream accepted the message;
+it does not prove consumer handling.
 
 ```mermaid
 sequenceDiagram
@@ -21,16 +21,16 @@ sequenceDiagram
     A->>DB: COMMIT both effects
 ```
 
-A future publisher claims eligible delivery rows using database time, `FOR UPDATE SKIP LOCKED`, a
+A publisher claims eligible delivery rows using database time, `FOR UPDATE SKIP LOCKED`, a
 bounded lease, and a UUIDv7 lease fence. Claim order is scheduling implementation, not delivery
 authority. Expiry permits reclaim with a new fence; a stale or replaced fence cannot publish or
 reschedule.
 
 ```mermaid
 sequenceDiagram
-    participant P as Future publisher
+    participant P as Authority publisher
     participant DB as Source PostgreSQL
-    participant T as Future transport
+    participant T as JetStream
     P->>DB: Claim with publisher and lease IDs
     DB-->>P: Exact bytes and active lease
     P->>T: Publish exact bytes
@@ -40,20 +40,20 @@ sequenceDiagram
 
 A consumer validates exact envelope bytes and its exact typed descriptor before beginning local
 work. It then validates target and tenant fence, inserts or compares the named inbox receipt,
-applies local effects, and inserts derived outbox messages in one local transaction. A future
-transport acknowledgment occurs only after commit. One receipt proves only that one named handler
+applies local effects, and inserts derived outbox messages in one local transaction. A JetStream
+double acknowledgment occurs only after commit. One receipt proves only that one named handler
 committed its authority-local transaction.
 
 ```mermaid
 sequenceDiagram
-    participant T as Future transport
+    participant T as JetStream
     participant C as Consumer handler
     participant DB as Consumer PostgreSQL
     T->>C: Deliver exact envelope bytes
     C->>C: Validate envelope, descriptor, target, and fence
     C->>DB: BEGIN; receipt + local effects + derived outbox
     C->>DB: COMMIT
-    C-->>T: Future acknowledgment after commit
+    C-->>T: Double acknowledgment after commit
 ```
 
 ## Expected duplicate windows
@@ -63,8 +63,8 @@ expires and the exact bytes are published again.
 
 ```mermaid
 sequenceDiagram
-    participant P as Future publisher
-    participant T as Future transport
+    participant P as Authority publisher
+    participant T as JetStream
     participant DB as Source PostgreSQL
     P->>T: Publish
     T-->>P: Accepted
@@ -78,7 +78,7 @@ bytes match. Different bytes are a conflict.
 
 ```mermaid
 sequenceDiagram
-    participant T as Future transport
+    participant T as JetStream
     participant C as Consumer handler
     participant DB as Consumer PostgreSQL
     C->>DB: Commit receipt and effects

@@ -3,6 +3,7 @@ members = [
     "apps/cell-api",
     "apps/cell-worker",
     "apps/db-migrator",
+    "apps/nats-provisioner",
     "apps/platform-api",
     "apps/platform-worker",
     "apps/tenant-router",
@@ -10,11 +11,15 @@ members = [
     "crates/auth-context",
     "crates/cell-application",
     "crates/cell-migrations",
+    "crates/cell-message-runtime",
     "crates/cell-postgres",
     "crates/message-codec-json",
     "crates/message-domain",
+    "crates/nats-jetstream",
+    "crates/nats-jetstream-admin",
     "crates/platform-application",
     "crates/platform-migrations",
+    "crates/platform-message-runtime",
     "crates/platform-postgres",
     "crates/postgres-runtime",
     "crates/postgres-message-store",
@@ -22,9 +27,12 @@ members = [
     "crates/provisioning-domain",
     "crates/routing-application",
     "crates/runtime-config",
+    "crates/runtime-identity",
     "crates/secret-resolution",
     "crates/tenancy-domain",
     "crates/test-support",
+    "crates/transport-probe-contracts",
+    "tools/nats-qualification",
     "tools/postgres-qualification",
     "tools/message-store-qualification",
     "tools/xtask",
@@ -40,9 +48,11 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 anyhow = { version = "=1.0.104", default-features = false, features = ["std"] }
+async-nats = { version = "=0.50.0", default-features = false, features = ["jetstream", "ring", "server_2_14"] }
 clap = { version = "=4.6.4", default-features = false, features = ["derive", "std"] }
 config = { version = "=0.15.25", default-features = false, features = ["toml"] }
 getrandom = { version = "=0.4.3", default-features = false }
+futures-util = { version = "=0.3.33", default-features = false, features = ["async-await", "sink", "std"] }
 proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
 secrecy = { version = "=0.10.3", default-features = false }
 serde = { version = "=1.0.229", default-features = false, features = ["derive", "std"] }
@@ -53,19 +63,24 @@ thiserror = { version = "=2.0.19", default-features = false, features = ["std"] 
 time = { version = "=0.3.54", default-features = false, features = ["std", "formatting", "parsing", "macros"] }
 tokio = { version = "=1.51.4", default-features = false, features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "=0.7.19", default-features = false, features = ["rt"] }
+toml = { version = "=1.1.4", default-features = false, features = ["parse", "serde", "std"] }
 tracing = { version = "=0.1.44", default-features = false, features = ["attributes", "std"] }
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["env-filter", "fmt", "json", "registry", "std"] }
-uuid = { version = "=1.24.0", default-features = false, features = ["std"] }
+uuid = { version = "=1.24.0", default-features = false, features = ["std", "v7", "rng-getrandom"] }
 
 audit-domain = { path = "crates/audit-domain", version = "=0.1.0" }
 auth-context = { path = "crates/auth-context", version = "=0.1.0" }
 cell-application = { path = "crates/cell-application", version = "=0.1.0" }
 cell-migrations = { path = "crates/cell-migrations", version = "=0.1.0" }
+cell-message-runtime = { path = "crates/cell-message-runtime", version = "=0.1.0" }
 cell-postgres = { path = "crates/cell-postgres", version = "=0.1.0" }
 message-codec-json = { path = "crates/message-codec-json", version = "=0.1.0" }
 message-domain = { path = "crates/message-domain", version = "=0.1.0" }
+nats-jetstream = { path = "crates/nats-jetstream", version = "=0.1.0" }
+nats-jetstream-admin = { path = "crates/nats-jetstream-admin", version = "=0.1.0" }
 platform-application = { path = "crates/platform-application", version = "=0.1.0" }
 platform-migrations = { path = "crates/platform-migrations", version = "=0.1.0" }
+platform-message-runtime = { path = "crates/platform-message-runtime", version = "=0.1.0" }
 platform-postgres = { path = "crates/platform-postgres", version = "=0.1.0" }
 postgres-runtime = { path = "crates/postgres-runtime", version = "=0.1.0" }
 postgres-message-store = { path = "crates/postgres-message-store", version = "=0.1.0" }
@@ -73,9 +88,11 @@ process-lifecycle = { path = "crates/process-lifecycle", version = "=0.1.0" }
 provisioning-domain = { path = "crates/provisioning-domain", version = "=0.1.0" }
 routing-application = { path = "crates/routing-application", version = "=0.1.0" }
 runtime-config = { path = "crates/runtime-config", version = "=0.1.0" }
+runtime-identity = { path = "crates/runtime-identity", version = "=0.1.0" }
 secret-resolution = { path = "crates/secret-resolution", version = "=0.1.0" }
 tenancy-domain = { path = "crates/tenancy-domain", version = "=0.1.0" }
 test-support = { path = "crates/test-support", version = "=0.1.0" }
+transport-probe-contracts = { path = "crates/transport-probe-contracts", version = "=0.1.0" }
 
 [workspace.lints.rust]
 missing_docs = "deny"

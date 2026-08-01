@@ -1,0 +1,62 @@
+services:
+  nats-1:
+    # Human-readable lock tag: nats:2.14.3-alpine3.22; digest is the verified OCI index.
+    image: nats:2.14.3-alpine3.22@sha256:c11af972c99ae542de8925e6a7d9c533aa1eb039660420d2074beed6089b3bf0
+    command: ["-c", "/etc/nats/server.conf"]
+    ports:
+      - "127.0.0.1:${EDTECH_NATS_1_CLIENT_PORT:-54222}:4222"
+      - "127.0.0.1:${EDTECH_NATS_1_MONITOR_PORT:-58222}:8222"
+    volumes:
+      - ${EDTECH_NATS_STATE_DIR:?generated state directory required}/config/nats-1.conf:/etc/nats/server.conf:ro
+      - ${EDTECH_NATS_STATE_DIR:?generated state directory required}/tls:/run/edtech-nats/tls:ro
+      - nats-1-jetstream:/var/lib/nats/jetstream
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - 'http://127.0.0.1:8222/healthz?js-enabled-only=true' >/dev/null"]
+      interval: 2s
+      timeout: 3s
+      retries: 45
+      start_period: 5s
+    stop_grace_period: 10s
+
+  nats-2:
+    # Human-readable lock tag: nats:2.14.3-alpine3.22; digest is the verified OCI index.
+    image: nats:2.14.3-alpine3.22@sha256:c11af972c99ae542de8925e6a7d9c533aa1eb039660420d2074beed6089b3bf0
+    command: ["-c", "/etc/nats/server.conf"]
+    ports:
+      - "127.0.0.1:${EDTECH_NATS_2_CLIENT_PORT:-54223}:4222"
+      - "127.0.0.1:${EDTECH_NATS_2_MONITOR_PORT:-58223}:8222"
+    volumes:
+      - ${EDTECH_NATS_STATE_DIR:?generated state directory required}/config/nats-2.conf:/etc/nats/server.conf:ro
+      - ${EDTECH_NATS_STATE_DIR:?generated state directory required}/tls:/run/edtech-nats/tls:ro
+      - nats-2-jetstream:/var/lib/nats/jetstream
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - 'http://127.0.0.1:8222/healthz?js-enabled-only=true' >/dev/null"]
+      interval: 2s
+      timeout: 3s
+      retries: 45
+      start_period: 5s
+    stop_grace_period: 10s
+
+  nats-3:
+    # Human-readable lock tag: nats:2.14.3-alpine3.22; digest is the verified OCI index.
+    image: nats:2.14.3-alpine3.22@sha256:c11af972c99ae542de8925e6a7d9c533aa1eb039660420d2074beed6089b3bf0
+    command: ["-c", "/etc/nats/server.conf"]
+    ports:
+      - "127.0.0.1:${EDTECH_NATS_3_CLIENT_PORT:-54224}:4222"
+      - "127.0.0.1:${EDTECH_NATS_3_MONITOR_PORT:-58224}:8222"
+    volumes:
+      - ${EDTECH_NATS_STATE_DIR:?generated state directory required}/config/nats-3.conf:/etc/nats/server.conf:ro
+      - ${EDTECH_NATS_STATE_DIR:?generated state directory required}/tls:/run/edtech-nats/tls:ro
+      - nats-3-jetstream:/var/lib/nats/jetstream
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - 'http://127.0.0.1:8222/healthz?js-enabled-only=true' >/dev/null"]
+      interval: 2s
+      timeout: 3s
+      retries: 45
+      start_period: 5s
+    stop_grace_period: 10s
+
+volumes:
+  nats-1-jetstream:
+  nats-2-jetstream:
+  nats-3-jetstream:

@@ -1,0 +1,118 @@
+# Rendered independently for each node. Values in double braces are generated locally by xtask.
+server_name: {{SERVER_NAME}}
+server_tags: ["az:{{AZ_NUMBER}}"]
+host: 0.0.0.0
+port: 4222
+http_port: 8222
+
+tls {
+  cert_file: "/run/edtech-nats/tls/{{SERVER_NAME}}.pem"
+  key_file: "/run/edtech-nats/tls/{{SERVER_NAME}}-key.pem"
+  timeout: 3
+}
+
+jetstream {
+  store_dir: "/var/lib/nats/jetstream"
+  max_memory_store: 256MB
+  max_file_store: 8GB
+  strict: true
+  unique_tag: "az"
+}
+
+cluster {
+  name: edtech-local
+  host: 0.0.0.0
+  port: 6222
+  cluster_advertise: "{{SERVER_NAME}}:6222"
+  authorization {
+    user: "{{ROUTE_USERNAME}}"
+    password: "{{ROUTE_PASSWORD}}"
+    timeout: 3
+  }
+  routes: [
+    nats-route://{{ROUTE_USERNAME}}:{{ROUTE_PASSWORD}}@nats-1:6222,
+    nats-route://{{ROUTE_USERNAME}}:{{ROUTE_PASSWORD}}@nats-2:6222,
+    nats-route://{{ROUTE_USERNAME}}:{{ROUTE_PASSWORD}}@nats-3:6222
+  ]
+  tls {
+    cert_file: "/run/edtech-nats/tls/{{SERVER_NAME}}.pem"
+    key_file: "/run/edtech-nats/tls/{{SERVER_NAME}}-key.pem"
+    ca_file: "/run/edtech-nats/tls/ca.pem"
+    timeout: 3
+  }
+}
+
+system_account: SYS
+
+accounts {
+  SYS {
+    users: [
+      { user: "{{SYSTEM_USERNAME}}", password: "{{SYSTEM_PASSWORD}}" }
+    ]
+  }
+
+  EDTECH {
+    jetstream {
+      max_memory: 256MB
+      # Replicated reservations are accounted per replica; the two exact R3 streams reserve 9 GiB.
+      max_store: 16GB
+      max_streams: 16
+      max_consumers: 2048
+      max_ack_pending: 4096
+    }
+    users: [
+      {
+        user: "edtech_nats_provisioner"
+        password: "{{PROVISIONER_PASSWORD}}"
+        permissions: {
+          publish: {
+            allow: ["$JS.API.STREAM.NAMES", "$JS.API.STREAM.INFO.*", "$JS.API.STREAM.CREATE.*", "$JS.API.STREAM.UPDATE.*", "$JS.API.CONSUMER.NAMES.*", "$JS.API.CONSUMER.LIST.*", "$JS.API.CONSUMER.INFO.*.*", "$JS.API.CONSUMER.CREATE.EDTECH_COMMANDS_V1.EDTECH_PLATFORM_COMMANDS_V1.edtech.v1.command.cell-to-platform.>", "$JS.API.CONSUMER.CREATE.EDTECH_EVENTS_V1.EDTECH_PLATFORM_EVENTS_V1.edtech.v1.event.cell-to-platform.>", "$JS.API.CONSUMER.CREATE.EDTECH_COMMANDS_V1.*.edtech.v1.command.platform-to-cell.>", "$JS.API.CONSUMER.CREATE.EDTECH_EVENTS_V1.*.edtech.v1.event.platform-to-cell.>"]
+            deny: ["edtech.>", "$JS.API.STREAM.DELETE.>", "$JS.API.STREAM.PURGE.>", "$JS.API.STREAM.MSG.DELETE.>", "$JS.API.CONSUMER.DELETE.>", "$JS.API.CONSUMER.RESET.>"]
+          }
+          subscribe: { allow: ["_INBOX.>"] }
+        }
+      },
+      {
+        user: "edtech_platform_worker"
+        password: "{{PLATFORM_WORKER_PASSWORD}}"
+        permissions: {
+          publish: {
+            allow: ["edtech.v1.command.platform-to-cell.>", "edtech.v1.event.platform-to-cell.>", "$JS.API.STREAM.INFO.EDTECH_COMMANDS_V1", "$JS.API.STREAM.INFO.EDTECH_EVENTS_V1", "$JS.API.CONSUMER.INFO.EDTECH_COMMANDS_V1.EDTECH_PLATFORM_COMMANDS_V1", "$JS.API.CONSUMER.INFO.EDTECH_EVENTS_V1.EDTECH_PLATFORM_EVENTS_V1", "$JS.API.CONSUMER.MSG.NEXT.EDTECH_COMMANDS_V1.EDTECH_PLATFORM_COMMANDS_V1", "$JS.API.CONSUMER.MSG.NEXT.EDTECH_EVENTS_V1.EDTECH_PLATFORM_EVENTS_V1", "$JS.ACK.EDTECH_COMMANDS_V1.EDTECH_PLATFORM_COMMANDS_V1.>", "$JS.ACK.EDTECH_EVENTS_V1.EDTECH_PLATFORM_EVENTS_V1.>"]
+            deny: ["edtech.v1.command.cell-to-platform.>", "edtech.v1.event.cell-to-platform.>", "$JS.API.STREAM.CREATE.>", "$JS.API.STREAM.UPDATE.>", "$JS.API.STREAM.DELETE.>", "$JS.API.STREAM.PURGE.>", "$JS.API.STREAM.MSG.DELETE.>", "$JS.API.CONSUMER.CREATE.>", "$JS.API.CONSUMER.DELETE.>", "$JS.API.CONSUMER.RESET.>"]
+          }
+          subscribe: { allow: ["_INBOX.>"], deny: ["edtech.>"] }
+        }
+      },
+      {
+        user: "edtech_cell_cell-001_worker"
+        password: "{{CELL_WORKER_PASSWORD}}"
+        permissions: {
+          publish: {
+            allow: ["edtech.v1.command.cell-to-platform.cell-001.>", "edtech.v1.event.cell-to-platform.cell-001.>", "$JS.API.STREAM.INFO.EDTECH_COMMANDS_V1", "$JS.API.STREAM.INFO.EDTECH_EVENTS_V1", "$JS.API.CONSUMER.INFO.EDTECH_COMMANDS_V1.EDTECH_CELL_CELL_001_COMMANDS_V1", "$JS.API.CONSUMER.INFO.EDTECH_EVENTS_V1.EDTECH_CELL_CELL_001_EVENTS_V1", "$JS.API.CONSUMER.MSG.NEXT.EDTECH_COMMANDS_V1.EDTECH_CELL_CELL_001_COMMANDS_V1", "$JS.API.CONSUMER.MSG.NEXT.EDTECH_EVENTS_V1.EDTECH_CELL_CELL_001_EVENTS_V1", "$JS.ACK.EDTECH_COMMANDS_V1.EDTECH_CELL_CELL_001_COMMANDS_V1.>", "$JS.ACK.EDTECH_EVENTS_V1.EDTECH_CELL_CELL_001_EVENTS_V1.>"]
+            deny: ["edtech.v1.command.platform-to-cell.>", "edtech.v1.event.platform-to-cell.>", "edtech.v1.command.cell-to-platform.cell-002.>", "edtech.v1.event.cell-to-platform.cell-002.>", "$JS.API.STREAM.CREATE.>", "$JS.API.STREAM.UPDATE.>", "$JS.API.STREAM.DELETE.>", "$JS.API.STREAM.PURGE.>", "$JS.API.STREAM.MSG.DELETE.>", "$JS.API.CONSUMER.CREATE.>", "$JS.API.CONSUMER.DELETE.>", "$JS.API.CONSUMER.RESET.>"]
+          }
+          subscribe: { allow: ["_INBOX.>"], deny: ["edtech.>"] }
+        }
+      },
+      {
+        user: "edtech_qualification_injector"
+        password: "{{QUALIFICATION_PASSWORD}}"
+        permissions: {
+          publish: {
+            allow: ["edtech.v1.command.platform-to-cell.cell-001.>", "edtech.v1.event.platform-to-cell.cell-001.>", "edtech.v1.command.cell-to-platform.cell-001.>", "edtech.v1.event.cell-to-platform.cell-001.>"]
+            deny: ["$JS.API.>"]
+          }
+          subscribe: { deny: ["edtech.>"] }
+        }
+      },
+      {
+        user: "edtech_qualification_inspector"
+        password: "{{INSPECTOR_PASSWORD}}"
+        permissions: {
+          publish: { allow: ["$JS.API.INFO", "$JS.API.STREAM.NAMES", "$JS.API.STREAM.INFO.*", "$JS.API.CONSUMER.NAMES.*", "$JS.API.CONSUMER.LIST.*", "$JS.API.CONSUMER.INFO.*.*"] }
+          subscribe: { allow: ["_INBOX.>"] }
+        }
+      }
+    ]
+  }
+}

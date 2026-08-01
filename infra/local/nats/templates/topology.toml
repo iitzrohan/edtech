@@ -1,0 +1,67 @@
+schema_version = 1
+transport_contract_version = 1
+cells = ["cell-001"]
+
+[streams.commands]
+name = "EDTECH_COMMANDS_V1"
+subject = "edtech.v1.command.>"
+retention = "work_queue"
+storage = "file"
+replicas = 3
+discard = "new"
+max_message_size = 270336
+max_messages = 1000000
+max_bytes = 1073741824
+max_age_seconds = 604800
+max_consumers = 2048
+duplicate_window_seconds = 120
+allow_direct = false
+
+[streams.events]
+name = "EDTECH_EVENTS_V1"
+subject = "edtech.v1.event.>"
+retention = "limits"
+storage = "file"
+replicas = 3
+discard = "new"
+max_message_size = 270336
+max_messages = 2000000
+max_bytes = 2147483648
+max_age_seconds = 2592000
+max_consumers = 2048
+duplicate_window_seconds = 120
+allow_direct = false
+
+[consumers.platform_commands]
+stream = "EDTECH_COMMANDS_V1"
+durable_name = "EDTECH_PLATFORM_COMMANDS_V1"
+filter_subject = "edtech.v1.command.cell-to-platform.>"
+
+[consumers.platform_events]
+stream = "EDTECH_EVENTS_V1"
+durable_name = "EDTECH_PLATFORM_EVENTS_V1"
+filter_subject = "edtech.v1.event.cell-to-platform.>"
+
+[consumer_defaults]
+delivery = "pull"
+durable = true
+ack_policy = "explicit"
+deliver_policy = "all"
+replay_policy = "instant"
+ack_wait_seconds = 30
+max_deliver = -1
+max_ack_pending = 1024
+max_waiting = 64
+max_batch = 200
+max_expires_seconds = 5
+replicas = 3
+memory_storage = false
+inactive_auto_delete = false
+
+[cell_consumer_derivation]
+uppercase_cell_id = true
+replace_hyphen_with_underscore = true
+command_prefix = "EDTECH_CELL_"
+command_suffix = "_COMMANDS_V1"
+event_prefix = "EDTECH_CELL_"
+event_suffix = "_EVENTS_V1"

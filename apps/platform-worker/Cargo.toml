@@ -8,11 +8,13 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-platform-application.workspace = true
+nats-jetstream.workspace = true
+platform-message-runtime.workspace = true
 platform-postgres.workspace = true
 postgres-runtime.workspace = true
 process-lifecycle.workspace = true
 runtime-config.workspace = true
+runtime-identity.workspace = true
 secret-resolution.workspace = true
 tokio.workspace = true
 tracing.workspace = true

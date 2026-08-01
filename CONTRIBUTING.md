@@ -20,6 +20,9 @@ cargo xtask verify-postgres --profile ci
 
 Message contract changes require `cargo xtask verify-contracts`. Message-store changes require
 both that command and `cargo xtask verify-postgres --profile ci`.
+Transport contracts, subjects, providers, topology, worker message loops, or ACL changes also
+require `cargo xtask verify-nats --profile ci`. Regenerate committed Checkpoint 4 evidence with the
+full profile when a change alters qualified transport behavior or recorded metrics.
 
 ## Where code belongs
 
@@ -92,9 +95,37 @@ to prove removed implementation remains absent.
 - Keep secrets, credentials, tokens, authorization headers, database URLs, large binaries, and
   private object contents out of metadata and payloads. Never log payload or envelope bytes.
 - Outbox message bytes and inbox receipts are immutable. Runtime roles do not update or delete them.
-- Application code must not publish directly to a broker. Transport publication will belong behind
-  a qualified provider boundary in a later checkpoint.
+- Application code must not publish directly to a broker. Runtime publication belongs only behind
+  the qualified `nats-jetstream` provider.
 - Documentation must not claim exactly-once delivery or processing. Describe at-least-once behavior,
   duplicate windows, database inbox suppression, and business idempotency separately.
 - Run `cargo xtask verify-contracts` after any contract, fixture, codec, or contract-documentation
   change.
+
+## JetStream transport and topology
+
+- Application subjects are derived only by `nats-jetstream` from a validated envelope route. Do
+  not accept arbitrary subjects in configuration, interpolate a tenant or assignment epoch into a
+  subject, or publish through Core NATS.
+- The four route families are fixed by command/event kind and Platform-to-Cell/Cell-to-Platform
+  direction. The subject Cell token is topology scope; tenant authority remains in the envelope.
+- Workers bind only the pre-created durable consumers they own. They must not call
+  `get_or_create_stream`, `get_or_create_consumer`, or any stream/consumer mutation API.
+- Only `nats-provisioner` imports `nats-jetstream-admin`. It may create missing declared assets and
+  apply an explicitly safe monotonic capacity increase. It must refuse destructive drift and must
+  report unknown `EDTECH_` assets without deleting them.
+- To declare another static Cell, add its validated ID to
+  `infra/local/nats/templates/topology.toml`, review the derived non-overlapping command/event
+  filters and least-privilege ACLs, update qualification expectations, then run the CI transport
+  profile. Dynamic Cell registration is not present.
+- Never log an envelope, payload, individual tenant/message identifier, credential, private-key
+  path, or raw provider error. Persist and report stable content-free categories.
+- Documentation must describe transport acceptance, database publication marking, delivery,
+  inbox commit, and business completion as distinct states. It must not claim exactly-once behavior
+  or imply that broker acceptance proves consumption.
+- New or changed operational contracts require a strict typed payload, unique descriptor, canonical
+  LF-terminated fixture, byte-for-byte round-trip coverage, and `cargo xtask verify-contracts`.
+- Regenerate stable evidence only with
+  `cargo xtask qualify-nats --profile full --output docs/evidence/checkpoint-04 --replace`. Inspect
+  the result for aggregate-only content, confirm all generated resources were removed, and commit
+  both JSON and Markdown evidence with the behavior change.

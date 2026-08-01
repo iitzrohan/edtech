@@ -1,0 +1,23 @@
+[package]
+name = "nats-jetstream-admin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+async-nats.workspace = true
+futures-util.workspace = true
+nats-jetstream.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+tenancy-domain.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

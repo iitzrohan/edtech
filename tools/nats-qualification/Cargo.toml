@@ -1,0 +1,34 @@
+[package]
+name = "nats-qualification"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-nats.workspace = true
+cell-postgres.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+message-codec-json.workspace = true
+message-domain.workspace = true
+nats-jetstream.workspace = true
+nats-jetstream-admin.workspace = true
+platform-postgres.workspace = true
+postgres-message-store.workspace = true
+postgres-runtime.workspace = true
+secrecy.workspace = true
+secret-resolution.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tenancy-domain.workspace = true
+time.workspace = true
+tokio.workspace = true
+transport-probe-contracts.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,6 @@
+# Resolved from the exact official tag as a multi-platform OCI image index on 2026-08-01.
+repository = "nats"
+tag = "2.14.3-alpine3.22"
+index_digest = "sha256:c11af972c99ae542de8925e6a7d9c533aa1eb039660420d2074beed6089b3bf0"
+server_version = "2.14.3"
+required_platforms = ["linux/amd64", "linux/arm64/v8"]

@@ -1,6 +1,7 @@
 # Rust build output and compiler artifacts
 /target/
 /target/local-postgres/
+/target/local-nats/
 **/*.rs.bk
 *.pdb
 

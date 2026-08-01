@@ -1,8 +1,8 @@
-# EdTech message and PostgreSQL foundation
+# EdTech PostgreSQL and JetStream foundation
 
-This repository contains the Checkpoint 3 Rust/PostgreSQL message foundation for a future
-multi-tenant, event-driven EdTech platform. It preserves Checkpoints 1 and 2 while adding a
-transport-neutral contract, transactional outboxes, and database-local inbox receipts.
+This repository contains the Checkpoint 4 Rust/PostgreSQL message foundation for a future
+multi-tenant, event-driven EdTech platform. It preserves the earlier authority, tenancy, contract,
+outbox, and inbox invariants and adds NATS JetStream as the selected inter-authority transport.
 
 ## Platform and Cell authority
 
@@ -38,10 +38,12 @@ adapters, Cell binaries cannot import Platform adapters, and migration SQL exist
 migration crates. The permitted edges and source constraints are machine-enforced by
 `cargo xtask verify-architecture`.
 
-Message dependencies also point inward:
+Message and transport dependencies also point inward:
 
 ```text
 application/domain -> message-domain -> message-codec-json -> exact bytes -> authority outbox
+composition root -> authority message runtime -> opaque nats-jetstream provider
+nats-provisioner -> nats-jetstream-admin -> pre-created topology
 ```
 
 Commands request intent and target exactly one authority. Events record immutable facts committed
@@ -54,7 +56,28 @@ database time, `SKIP LOCKED`, and lease fencing. A published marker means only f
 acceptance, not consumption. A named inbox receipt suppresses exact duplicate delivery inside one
 database handler transaction; it does not prove exactly-once business processing.
 
-No broker, network delivery, publisher loop, or consumer loop exists yet.
+The local transport is a three-node, TLS-authenticated JetStream cluster. Commands use the
+`EDTECH_COMMANDS_V1` WorkQueue stream; events use the `EDTECH_EVENTS_V1` Limits stream. Subjects are
+fixed by direction and kind:
+
+```text
+edtech.v1.command.platform-to-cell.<cell-id>.<message-name-suffix>
+edtech.v1.command.cell-to-platform.<cell-id>.<message-name-suffix>
+edtech.v1.event.platform-to-cell.<cell-id>.<message-name-suffix>
+edtech.v1.event.cell-to-platform.<cell-id>.<message-name-suffix>
+```
+
+Tenant identity is deliberately absent from subjects. It remains inside the canonical envelope,
+together with `CellId` and `AssignmentEpoch`, and is checked by the destination database authority.
+Checkpoint 4 provisions only `cell-001` consumers.
+
+`platform-worker` publishes Platform outbox rows and consumes Platform command/event durables.
+`cell-worker` does the equivalent for its configured Cell. A publisher marks a row only after a
+validated JetStream acknowledgment. A consumer commits its inbox receipt and any derived message
+in one database transaction before requesting a JetStream double acknowledgment. Crashes can
+therefore cause republishing or redelivery. JetStream's two-minute duplicate window reduces one
+class of duplicate publication; the database inbox is the durable duplicate fence after that
+window. Published does not mean consumed, and no global exactly-once claim is made.
 
 ## Local commands
 
@@ -65,12 +88,19 @@ cargo xtask doctor
 cargo xtask verify
 cargo xtask verify-contracts
 cargo xtask doctor-postgres
+cargo xtask doctor-nats
 cargo xtask postgres-up
 cargo xtask migrate-local
+cargo xtask nats-up
+cargo xtask provision-nats-local
 cargo xtask verify-postgres --profile ci
 cargo xtask verify-message-store --profile ci
+cargo xtask verify-nats --profile ci
+cargo xtask verify-integration --profile ci
+cargo xtask qualify-nats --profile full --output docs/evidence/checkpoint-04 --replace
 cargo xtask qualify-message-store --profile full --output docs/evidence/checkpoint-03 --replace
 cargo xtask qualify-tenancy --profile full --output docs/evidence/checkpoint-02 --replace
+cargo xtask nats-down
 cargo xtask postgres-down
 cargo xtask verify-all
 ```
@@ -80,6 +110,12 @@ cargo xtask verify-all
 ports and file references. `postgres-down` removes the containers, volumes, and generated files.
 Automated verification uses unique project names, available loopback ports, and unconditional
 cleanup.
+
+`nats-up` generates a local CA, per-node certificates, six least-privilege credential files, and
+rendered server configurations beneath `target/local-nats/edtech-nats-local/`. Client and monitor
+ports are loopback-only; route ports are not published. `provision-nats-local` applies only approved
+non-destructive topology changes, and `nats-down` removes containers, volumes, credentials,
+certificates, and rendered configuration.
 
 ## Runtime configuration
 
@@ -98,16 +134,23 @@ Cell processes additionally require `EDTECH__CELL_ID=cell-001`. `npr` and `prd` 
 closed. `--check-config` does not resolve a secret or connect; `--check-database` resolves once and
 performs bounded server, role, authority-marker, and schema-contract checks.
 
+Workers additionally require `transport.servers`, an opaque `transport.credential_ref`, TLS mode,
+and a CA file for `verify_full`. They support `--check-transport` and `--check-runtime` for bounded
+transport-only and combined readiness checks. APIs, `tenant-router`, and `db-migrator` reject all
+transport fields and receive no NATS credential. `nats-provisioner` receives no database field or
+credential.
+
 ## Current claims and limitations
 
-Checkpoint 3 proves only the tested behavior recorded in
-`docs/checkpoints/03-message-contract-and-transactional-store.md` and its qualification evidence.
-That includes canonical typed envelopes, exact-byte persistence, transactional outbox/inbox
-behavior, lease fencing, assignment checks, canary atomicity, and direct broker-free transfer under
-the tested profiles. Existing physical authority, role, migration, RLS, and schema-inspection
-proofs remain green.
+Checkpoint 4 proves only the bounded behavior in
+`docs/checkpoints/04-nats-jetstream-transport.md` and the committed full-profile evidence. The real
+qualification uses one Docker host, two PostgreSQL authorities, three NATS nodes, actual worker
+processes, R3 streams/consumers, ACL negatives, deliberate crash windows, leader/quorum faults,
+restarts, and final database/broker reconciliation. Existing physical authority, role, migration,
+RLS, contract, and message-store proofs remain green; Checkpoint 4 adds no migration.
 
-It does not establish cloud network isolation, Kubernetes secret delivery, production hardening,
-availability, backup/restore, disaster recovery, network or broker delivery, publisher/consumer
-behavior, global ordering, business-operation idempotency, retention/replay, provisioning, routing,
-identity, product correctness, provider portability, production capacity, or production readiness.
+It does not establish multi-host or multi-zone availability, production sizing or retention,
+backup/restore, disaster recovery, dynamic Cell registration, tenant provisioning or movement,
+dead-letter handling, global or per-tenant ordering, business-operation idempotency, identity,
+routing, product correctness, provider portability, or production readiness. All local NATS nodes
+still share one Docker host, and only static `cell-001` topology is supported.

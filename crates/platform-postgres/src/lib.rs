@@ -7,8 +7,9 @@
 use message_domain::{EncodedMessage, MessageAuthority, MessageKind, MessageTarget};
 use postgres_message_store::{
     ClaimBatchSize, ClaimedMessage, ConsumerName, EnqueueOutcome, FailureCategory,
-    InboxReceiptOutcome, LeaseDuration, MessageStoreError, MessageStoreNamespace, OutboxLeaseId,
-    PublishMarkOutcome, PublisherInstanceId, RescheduleOutcome, RetryDelay,
+    InboxReceiptOutcome, LeaseDuration, MessageStoreError, MessageStoreErrorKind,
+    MessageStoreNamespace, OutboxLeaseId, PublishMarkOutcome, PublisherInstanceId,
+    RescheduleOutcome, RetryDelay,
 };
 use postgres_runtime::{
     DatabaseCredential, PostgresConnectionConfig, PostgresPool, ProviderError, ProviderErrorKind,
@@ -92,6 +93,10 @@ pub enum PlatformDatabaseErrorKind {
     InvalidInboundTarget,
     /// Reusable message-store mechanics failed.
     MessageStoreFailure,
+    /// One message identity names different immutable content.
+    MessageIdentityConflict,
+    /// Immutable stored message state is corrupt or cannot be represented.
+    StoreCorruption,
     /// An inbox identity conflicts with immutable stored content.
     InboxConflict,
 }
@@ -108,6 +113,8 @@ impl PlatformDatabaseErrorKind {
             Self::InvalidOutboundAuthority => "invalid_outbound_authority",
             Self::InvalidInboundTarget => "invalid_inbound_target",
             Self::MessageStoreFailure => "message_store_failure",
+            Self::MessageIdentityConflict => "message_identity_conflict",
+            Self::StoreCorruption => "store_corruption",
             Self::InboxConflict => "inbox_conflict",
         }
     }
@@ -163,8 +170,19 @@ impl From<ProviderError> for PlatformDatabaseError {
 }
 
 impl From<MessageStoreError> for PlatformDatabaseError {
-    fn from(_error: MessageStoreError) -> Self {
-        Self::new(PlatformDatabaseErrorKind::MessageStoreFailure)
+    fn from(error: MessageStoreError) -> Self {
+        let kind = match error.kind() {
+            MessageStoreErrorKind::ProviderFailure => {
+                PlatformDatabaseErrorKind::MessageStoreFailure
+            }
+            MessageStoreErrorKind::MessageIdentityConflict => {
+                PlatformDatabaseErrorKind::MessageIdentityConflict
+            }
+            MessageStoreErrorKind::StoreCorruption | MessageStoreErrorKind::InvalidStoredValue => {
+                PlatformDatabaseErrorKind::StoreCorruption
+            }
+        };
+        Self::new(kind)
     }
 }
 

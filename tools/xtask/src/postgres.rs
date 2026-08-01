@@ -25,7 +25,7 @@ pub enum QualificationProfile {
 }
 
 impl QualificationProfile {
-    const fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Ci => "ci",
             Self::Full => "full",
@@ -99,7 +99,7 @@ const CREDENTIAL_SPECS: &[CredentialSpec] = &[
     },
 ];
 
-struct LocalProject<'a> {
+pub(crate) struct LocalProject<'a> {
     root: &'a Path,
     state: LocalState,
     secret_dir: PathBuf,
@@ -191,7 +191,7 @@ impl<'a> LocalProject<'a> {
         write_private_file(&state_path, &bytes)
     }
 
-    fn start(&self) -> Result<()> {
+    pub(crate) fn start(&self) -> Result<()> {
         let mut command = self.compose_command();
         command.args(["up", "--detach", "--wait", "--wait-timeout", "90"]);
         run_status(&mut command, "docker compose up")
@@ -226,7 +226,7 @@ impl<'a> LocalProject<'a> {
         command
     }
 
-    fn cleanup(&mut self) -> Result<()> {
+    pub(crate) fn cleanup(&mut self) -> Result<()> {
         let stop_result = self.stop_and_remove();
         let remove_result = if self.secret_dir.exists() {
             fs::remove_dir_all(&self.secret_dir).with_context(|| {
@@ -266,7 +266,7 @@ impl<'a> LocalProject<'a> {
         ))
     }
 
-    fn reference(&self, authority: &str, purpose: &str) -> Result<String> {
+    pub(crate) fn reference(&self, authority: &str, purpose: &str) -> Result<String> {
         let specification = CREDENTIAL_SPECS
             .iter()
             .find(|specification| {
@@ -274,6 +274,10 @@ impl<'a> LocalProject<'a> {
             })
             .ok_or_else(|| anyhow!("unknown local PostgreSQL credential purpose"))?;
         Ok(format!("file:{}", self.url_path(*specification).display()))
+    }
+
+    pub(crate) fn temporary_directory(&self) -> &Path {
+        &self.secret_dir
     }
 }
 
@@ -496,6 +500,35 @@ fn run_disposable(
     }
 }
 
+pub(crate) fn disposable(root: &Path) -> Result<LocalProject<'_>> {
+    let (platform_port, cell_port) = allocate_loopback_ports()?;
+    LocalProject::prepare(
+        root,
+        LocalState {
+            project: unique_project_name()?,
+            platform_port,
+            cell_port,
+        },
+        true,
+    )
+}
+
+pub(crate) fn migrate(project: &LocalProject<'_>) -> Result<()> {
+    run_migrations(project)
+}
+
+pub(crate) fn verify_existing_prerequisites(
+    project: &LocalProject<'_>,
+    profile: QualificationProfile,
+) -> Result<()> {
+    let tenancy_output = project.secret_dir.join("integration-tenancy-evidence");
+    let message_output = project.secret_dir.join("integration-message-evidence");
+    run_qualification(project, profile, &tenancy_output, false)?;
+    run_message_store_qualification(project, profile, &message_output, false)?;
+    run_database_binary_checks(project)?;
+    verify_router_rejects_database(project)
+}
+
 fn run_message_store_qualification(
     project: &LocalProject<'_>,
     profile: QualificationProfile,
@@ -662,6 +695,15 @@ fn run_database_binary(
         .env("EDTECH__DATABASE__TLS_MODE", "disable")
         .env("EDTECH__DATABASE__MAX_CONNECTIONS", "4")
         .env("EDTECH__DATABASE__MIN_CONNECTIONS", "0");
+    if matches!(package, "platform-worker" | "cell-worker") {
+        command
+            .env("EDTECH__TRANSPORT__SERVERS", "nats://127.0.0.1:4222")
+            .env(
+                "EDTECH__TRANSPORT__CREDENTIAL_REF",
+                "file:/qualification/not-resolved-by-database-check",
+            )
+            .env("EDTECH__TRANSPORT__TLS_MODE", "disable");
+    }
     if package == "db-migrator" {
         command.env("EDTECH__MIGRATION_TIMEOUT_MS", "600000");
     }
