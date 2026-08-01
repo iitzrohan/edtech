@@ -19,8 +19,8 @@ These rules apply to this foundation and every later checkpoint.
 12. Dependencies point inward: composition roots to runtime/adapters to application use cases and
     application-owned ports to domain.
 13. An application crate must not depend on another application crate.
-14. Runtime application processes must not perform DDL. A separately privileged `db-migrator`
-    will own migrations in a later checkpoint.
+14. Runtime application processes must not perform DDL. The separately privileged, one-shot
+    `db-migrator` is the only deployable migration caller.
 15. Cross-authority workflows use commands, committed events, transactional outbox/inbox,
     idempotency, fencing, and reconciliation. They never use a distributed database transaction.
 16. Event delivery must be treated as at-least-once, unordered, and potentially duplicated.
@@ -28,10 +28,13 @@ These rules apply to this foundation and every later checkpoint.
     authority.
 18. Cache data is disposable derived data and must never become correctness or authorization
     authority.
-19. No EdTech product feature is part of Checkpoint 1.
-20. Checkpoint 1 must not be represented as proof of production readiness, database isolation,
-    messaging correctness, provider portability, high availability, disaster recovery, or security
-    certification.
+19. Every production tenant table belongs in `tenant_data` and must pass the forced-RLS schema
+    inspector.
+20. No EdTech product feature is part of Checkpoint 2.
+21. Checkpoint 2 must not be represented as proof of production readiness, cloud network
+    isolation, messaging correctness, provider portability, high availability, disaster recovery,
+    or protection against a completely compromised Cell runtime.
 
-The dependency half of these invariants is enforced by `cargo xtask verify-architecture`. Runtime
-authority isolation and distributed-systems behavior require later implementation and evidence.
+Dependency and source boundaries are enforced by `cargo xtask verify-architecture`. Local database
+authority, migration, privilege, and tenant-isolation behavior is exercised by
+`cargo xtask verify-postgres`; distributed-systems and production behavior require later evidence.

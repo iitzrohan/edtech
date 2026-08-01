@@ -7,7 +7,7 @@ use std::{env, ffi::OsStr};
 
 use anyhow::{Result, anyhow, bail};
 use process_lifecycle::{TaskSupervisor, shutdown_signal};
-use runtime_config::{ServiceKind, load_platform};
+use runtime_config::{ServiceKind, load_router};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -20,7 +20,7 @@ enum Mode {
 async fn main() -> Result<()> {
     let mode = parse_mode()?;
     let service = ServiceKind::TenantRouter;
-    let config = load_platform(service)?;
+    let config = load_router()?;
     let logging_filter = parse_logging_filter(config.base().log_filter().as_str())?;
 
     if matches!(mode, Mode::CheckConfig) {

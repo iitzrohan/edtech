@@ -9,8 +9,11 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 platform-application.workspace = true
+platform-postgres.workspace = true
+postgres-runtime.workspace = true
 process-lifecycle.workspace = true
 runtime-config.workspace = true
+secret-resolution.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

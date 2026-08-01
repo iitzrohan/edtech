@@ -8,8 +8,11 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-process-lifecycle.workspace = true
+cell-migrations.workspace = true
+platform-migrations.workspace = true
+postgres-runtime.workspace = true
 runtime-config.workspace = true
+secret-resolution.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

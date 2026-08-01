@@ -6,5 +6,10 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[dependencies]
+auth-context.workspace = true
+tenancy-domain.workspace = true
+thiserror.workspace = true
+
 [lints]
 workspace = true

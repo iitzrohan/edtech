@@ -3,6 +3,8 @@
 //! `xtask` performs toolchain diagnostics, static architecture enforcement, configuration smoke
 //! checks, and the deterministic full verification sequence without external services.
 
+mod postgres;
+
 use std::{
     collections::{BTreeSet, HashSet},
     env, fs,
@@ -13,6 +15,8 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
+
+use postgres::QualificationProfile;
 
 const REQUIRED_RUST_VERSION: &str = "1.97.1";
 const RULES_PATH: &str = "architecture/dependency-rules.json";
@@ -34,6 +38,52 @@ enum RepositoryCommand {
     Smoke,
     /// Run the complete deterministic repository verification sequence.
     Verify,
+    /// Check Docker, Compose, the pinned image, and local `PostgreSQL` infrastructure.
+    DoctorPostgres,
+    /// Start a persistent manual Platform/Cell `PostgreSQL` pair.
+    PostgresUp {
+        /// Safe Compose project name.
+        #[arg(long, default_value = "edtech-local")]
+        project: String,
+        /// Loopback host port for Platform `PostgreSQL`.
+        #[arg(long)]
+        platform_port: Option<u16>,
+        /// Loopback host port for Cell `PostgreSQL`.
+        #[arg(long)]
+        cell_port: Option<u16>,
+    },
+    /// Stop a manual `PostgreSQL` pair and remove its volumes and credentials.
+    PostgresDown {
+        /// Safe Compose project name.
+        #[arg(long, default_value = "edtech-local")]
+        project: String,
+    },
+    /// Run Platform and Cell migrations against the healthy manual pair.
+    MigrateLocal {
+        /// Safe Compose project name.
+        #[arg(long, default_value = "edtech-local")]
+        project: String,
+    },
+    /// Qualify `PostgreSQL` correctness using disposable local authorities.
+    VerifyPostgres {
+        /// Deterministic qualification workload.
+        #[arg(long, value_enum, default_value_t = QualificationProfile::Ci)]
+        profile: QualificationProfile,
+    },
+    /// Run tenancy qualification and write stable, credential-free evidence.
+    QualifyTenancy {
+        /// Deterministic qualification workload.
+        #[arg(long, value_enum)]
+        profile: QualificationProfile,
+        /// Directory for JSON and Markdown evidence.
+        #[arg(long)]
+        output: PathBuf,
+        /// Permit replacement of existing qualification evidence.
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Run workspace verification followed by the `PostgreSQL` CI profile.
+    VerifyAll,
 }
 
 fn main() -> Result<()> {
@@ -43,6 +93,24 @@ fn main() -> Result<()> {
         RepositoryCommand::VerifyArchitecture => verify_architecture(&root),
         RepositoryCommand::Smoke => smoke(&root),
         RepositoryCommand::Verify => verify(&root),
+        RepositoryCommand::DoctorPostgres => postgres::doctor(&root),
+        RepositoryCommand::PostgresUp {
+            project,
+            platform_port,
+            cell_port,
+        } => postgres::up(&root, &project, platform_port, cell_port),
+        RepositoryCommand::PostgresDown { project } => postgres::down(&root, &project),
+        RepositoryCommand::MigrateLocal { project } => postgres::migrate_local(&root, &project),
+        RepositoryCommand::VerifyPostgres { profile } => postgres::verify(&root, profile),
+        RepositoryCommand::QualifyTenancy {
+            profile,
+            output,
+            replace,
+        } => postgres::qualify(&root, profile, &output, replace),
+        RepositoryCommand::VerifyAll => {
+            verify(&root)?;
+            postgres::verify(&root, QualificationProfile::Ci)
+        }
     }
 }
 
@@ -89,11 +157,28 @@ fn doctor(root: &Path) -> Result<()> {
         "crates/routing-application",
         "crates/runtime-config",
         "crates/process-lifecycle",
+        "crates/secret-resolution",
+        "crates/postgres-runtime",
+        "crates/platform-postgres",
+        "crates/cell-postgres",
+        "crates/platform-migrations",
+        "crates/cell-migrations",
         "crates/test-support",
+        "infra/local/postgres/compose.yml",
+        "infra/local/postgres/platform/init/001-bootstrap.sh",
+        "infra/local/postgres/cell/init/001-bootstrap.sh",
         "docs/adr/0001-workspace-foundation.md",
+        "docs/adr/0002-postgresql-authority-and-tenancy.md",
         "docs/architecture/invariants.md",
+        "docs/architecture/database-authorities.md",
+        "docs/architecture/tenant-storage-rules.md",
         "docs/checkpoints/01-workspace-foundation.md",
+        "docs/checkpoints/02-postgresql-authority-and-tenancy.md",
+        "docs/evidence/checkpoint-02/postgres-qualification.json",
+        "docs/evidence/checkpoint-02/postgres-qualification.md",
+        "docs/runbooks/local-postgres.md",
         "tools/xtask",
+        "tools/postgres-qualification",
         ".editorconfig",
         ".gitignore",
         "Cargo.lock",
@@ -225,6 +310,10 @@ struct RuleClasses {
     cell_binary: BTreeSet<String>,
     deployable_binary: BTreeSet<String>,
     composition_support: BTreeSet<String>,
+    secret_adapter: BTreeSet<String>,
+    postgres_provider: BTreeSet<String>,
+    migration_adapter: BTreeSet<String>,
+    qualification_tool: BTreeSet<String>,
     test_support: BTreeSet<String>,
     tool: BTreeSet<String>,
 }
@@ -289,7 +378,7 @@ fn verify_architecture(root: &Path) -> Result<()> {
     let mut violations = validate_graph(&graph, &rules);
     violations.extend(validate_member_manifests(&metadata, root)?);
     violations.extend(validate_root_dependencies(root)?);
-    violations.extend(validate_source_boundaries(root)?);
+    violations.extend(validate_source_boundaries(root, &rules)?);
     violations.sort();
     violations.dedup();
 
@@ -315,7 +404,7 @@ fn read_rules(root: &Path) -> Result<DependencyRules> {
         fs::read_to_string(&path).with_context(|| format!("could not read {}", path.display()))?;
     let rules: DependencyRules = serde_json::from_str(&contents)
         .with_context(|| format!("could not parse {}", path.display()))?;
-    if rules.schema_version != 1 {
+    if rules.schema_version != 2 {
         bail!(
             "unsupported dependency-rule schema {}",
             rules.schema_version
@@ -418,11 +507,35 @@ fn validate_graph(graph: &[GraphPackage], rules: &DependencyRules) -> Vec<String
                 validate_external_edge(package, dependency, rules, &mut violations);
             }
         }
+
+        let runtime_binary = rules.classes.deployable_binary.contains(&package.name)
+            && package.name != "db-migrator";
+        if runtime_binary {
+            let has_platform_adapter = package.dependencies.iter().any(|dependency| {
+                matches!(
+                    dependency.name.as_str(),
+                    "platform-postgres" | "platform-migrations"
+                )
+            });
+            let has_cell_adapter = package.dependencies.iter().any(|dependency| {
+                matches!(
+                    dependency.name.as_str(),
+                    "cell-postgres" | "cell-migrations"
+                )
+            });
+            if has_platform_adapter && has_cell_adapter {
+                violations.push(format!(
+                    "runtime binary `{}` depends on both Platform and Cell database adapters",
+                    package.name
+                ));
+            }
+        }
     }
 
     violations
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_workspace_edge(
     package: &GraphPackage,
     dependency: &GraphDependency,
@@ -444,6 +557,10 @@ fn validate_workspace_edge(
     if rules.classes.domain.contains(&package.name)
         && (rules.classes.application.contains(&dependency.name)
             || rules.classes.composition_support.contains(&dependency.name)
+            || rules.classes.secret_adapter.contains(&dependency.name)
+            || rules.classes.postgres_provider.contains(&dependency.name)
+            || rules.classes.migration_adapter.contains(&dependency.name)
+            || rules.classes.qualification_tool.contains(&dependency.name)
             || rules.classes.deployable_binary.contains(&dependency.name)
             || rules.classes.tool.contains(&dependency.name))
     {
@@ -461,19 +578,84 @@ fn validate_workspace_edge(
         ));
     }
     if rules.classes.platform_binary.contains(&package.name)
-        && dependency.name == "cell-application"
+        && matches!(
+            dependency.name.as_str(),
+            "cell-application" | "cell-postgres" | "cell-migrations"
+        )
     {
         violations.push(format!(
-            "Platform binary `{}` imports the Cell application boundary",
-            package.name
+            "Platform binary `{}` imports forbidden Cell package `{}`",
+            package.name, dependency.name
         ));
     }
     if rules.classes.cell_binary.contains(&package.name)
-        && dependency.name == "platform-application"
+        && matches!(
+            dependency.name.as_str(),
+            "platform-application" | "platform-postgres" | "platform-migrations"
+        )
     {
         violations.push(format!(
-            "Cell binary `{}` imports the Platform application boundary",
-            package.name
+            "Cell binary `{}` imports forbidden Platform package `{}`",
+            package.name, dependency.name
+        ));
+    }
+    if package.name == "tenant-router"
+        && (rules.classes.secret_adapter.contains(&dependency.name)
+            || rules.classes.postgres_provider.contains(&dependency.name)
+            || rules.classes.migration_adapter.contains(&dependency.name))
+    {
+        violations.push(format!(
+            "tenant-router imports forbidden database package `{}`",
+            dependency.name
+        ));
+    }
+    if package.name == "platform-postgres"
+        && (dependency.name.starts_with("cell-") || dependency.name == "cell-application")
+    {
+        violations.push(format!(
+            "platform-postgres imports forbidden Cell package `{}`",
+            dependency.name
+        ));
+    }
+    if package.name == "cell-postgres" && dependency.name.starts_with("platform-") {
+        violations.push(format!(
+            "cell-postgres imports forbidden Platform package `{}`",
+            dependency.name
+        ));
+    }
+    if rules.classes.migration_adapter.contains(&dependency.name)
+        && !matches!(
+            package.name.as_str(),
+            "db-migrator" | "postgres-qualification"
+        )
+    {
+        violations.push(format!(
+            "migration crate `{}` is imported by forbidden package `{}`",
+            dependency.name, package.name
+        ));
+    }
+    if rules.classes.qualification_tool.contains(&dependency.name) {
+        violations.push(format!(
+            "qualification tool `{}` is imported by production package `{}`",
+            dependency.name, package.name
+        ));
+    }
+    if (rules.classes.domain.contains(&package.name)
+        || rules.classes.application.contains(&package.name))
+        && rules.classes.secret_adapter.contains(&dependency.name)
+    {
+        violations.push(format!(
+            "domain/application crate `{}` imports secret adapter `{}`",
+            package.name, dependency.name
+        ));
+    }
+    if rules.classes.deployable_binary.contains(&package.name)
+        && package.name != "db-migrator"
+        && rules.classes.migration_adapter.contains(&dependency.name)
+    {
+        violations.push(format!(
+            "runtime binary `{}` imports migration crate `{}`",
+            package.name, dependency.name
         ));
     }
     if rules.classes.deployable_binary.contains(&package.name)
@@ -518,6 +700,53 @@ fn validate_external_edge(
     {
         violations.push(format!(
             "`{}` must not use anyhow as a normal dependency",
+            package.name
+        ));
+    }
+
+    let domain_or_application = rules.classes.domain.contains(&package.name)
+        || rules.classes.application.contains(&package.name);
+    if domain_or_application && matches!(dependency.name.as_str(), "sqlx" | "secrecy") {
+        violations.push(format!(
+            "domain/application crate `{}` imports forbidden `{}`",
+            package.name, dependency.name
+        ));
+    }
+
+    if dependency.name == "sqlx"
+        && !(rules.classes.postgres_provider.contains(&package.name)
+            || rules.classes.migration_adapter.contains(&package.name)
+            || rules.classes.qualification_tool.contains(&package.name))
+    {
+        violations.push(format!(
+            "package `{}` imports SQLx outside the PostgreSQL provider, migration, or qualification boundary",
+            package.name
+        ));
+    }
+
+    if dependency.name == "secrecy"
+        && !(rules.classes.composition_support.contains(&package.name)
+            || rules.classes.secret_adapter.contains(&package.name)
+            || rules.classes.postgres_provider.contains(&package.name)
+            || rules.classes.migration_adapter.contains(&package.name)
+            || rules.classes.qualification_tool.contains(&package.name))
+    {
+        violations.push(format!(
+            "package `{}` imports secrecy outside a secret, provider, composition, migration, or qualification boundary",
+            package.name
+        ));
+    }
+
+    if dependency.name == "getrandom" && package.name != "xtask" {
+        violations.push(format!(
+            "package `{}` imports getrandom; disposable credential generation belongs to xtask",
+            package.name
+        ));
+    }
+
+    if dependency.name == "tempfile" && dependency.kind == "normal" {
+        violations.push(format!(
+            "package `{}` uses tempfile as a normal dependency",
             package.name
         ));
     }
@@ -675,46 +904,21 @@ fn shorthand_requirement(line: &str) -> Option<&str> {
         .map(|(requirement, _)| requirement)
 }
 
-fn validate_source_boundaries(root: &Path) -> Result<Vec<String>> {
-    let mut rust_files = Vec::new();
-    collect_rust_files(root, &mut rust_files)?;
+fn validate_source_boundaries(root: &Path, rules: &DependencyRules) -> Result<Vec<String>> {
+    let mut source_files = Vec::new();
+    collect_source_files(root, &mut source_files)?;
     let mut violations = Vec::new();
-    let placeholder_patterns = [["todo", "!"].concat(), ["unimplemented", "!"].concat()];
-    let direct_spawn_pattern = ["tokio", "::", "spawn"].concat();
 
-    for path in rust_files {
+    for path in source_files {
         let contents = fs::read_to_string(&path)
             .with_context(|| format!("could not read {}", path.display()))?;
-        let is_test_file = path
-            .components()
-            .any(|component| component.as_os_str() == "tests")
-            || path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .is_some_and(|stem| stem.ends_with("_test"));
-        if !is_test_file {
-            for pattern in &placeholder_patterns {
-                if contents.contains(pattern) {
-                    violations.push(format!(
-                        "non-test source `{}` contains forbidden placeholder macro `{pattern}`",
-                        relative_display(root, &path)
-                    ));
-                }
-            }
-        }
-
-        if path.starts_with(root.join("apps")) && contents.contains(&direct_spawn_pattern) {
-            violations.push(format!(
-                "application binary source `{}` starts a Tokio task directly",
-                relative_display(root, &path)
-            ));
-        }
+        violations.extend(source_violations(root, &path, &contents, rules));
     }
 
     Ok(violations)
 }
 
-fn collect_rust_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+fn collect_source_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     for entry in fs::read_dir(directory)
         .with_context(|| format!("could not inspect {}", directory.display()))?
     {
@@ -723,13 +927,251 @@ fn collect_rust_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<()> 
         if path.is_dir() {
             let name = entry.file_name();
             if name != "target" && name != ".git" {
-                collect_rust_files(&path, files)?;
+                collect_source_files(&path, files)?;
             }
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
+        } else if path.extension().is_some_and(|extension| {
+            matches!(
+                extension.to_str(),
+                Some("rs" | "sql" | "toml" | "json" | "md" | "yml" | "yaml" | "sh")
+            )
+        }) {
             files.push(path);
         }
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+fn source_violations(
+    root: &Path,
+    path: &Path,
+    contents: &str,
+    rules: &DependencyRules,
+) -> Vec<String> {
+    let mut violations = Vec::new();
+    let relative = relative_display(root, path);
+    let is_rust = path.extension().is_some_and(|extension| extension == "rs");
+    let is_sql = path.extension().is_some_and(|extension| extension == "sql");
+    let is_test_file = is_approved_test_path(path);
+    let production = if is_rust && !is_test_file {
+        contents
+            .split_once("#[cfg(test)]")
+            .map_or(contents, |(before_tests, _)| before_tests)
+    } else if is_test_file {
+        ""
+    } else {
+        contents
+    };
+    let package = package_name_from_path(root, path);
+
+    if is_rust && !is_test_file {
+        for pattern in [
+            ["todo", "!"].concat(),
+            ["unimplemented", "!"].concat(),
+            ["panic", "!"].concat(),
+            String::from(".unwrap("),
+            String::from(".expect("),
+        ] {
+            if production.contains(&pattern) {
+                violations.push(format!(
+                    "non-test source `{relative}` contains forbidden construct `{pattern}`"
+                ));
+            }
+        }
+        if production.contains("unsafe {")
+            || production.contains("unsafe fn")
+            || production.contains("unsafe impl")
+            || production.contains("unsafe trait")
+        {
+            violations.push(format!(
+                "non-test source `{relative}` contains forbidden unsafe code"
+            ));
+        }
+    }
+
+    if path.starts_with(root.join("apps")) && production.contains("tokio::spawn") {
+        violations.push(format!(
+            "application binary source `{relative}` starts a Tokio task directly"
+        ));
+    }
+
+    let approved_url_location = path.starts_with(root.join("infra/local/postgres"))
+        || path.starts_with(root.join("tools/postgres-qualification"))
+        || is_test_file;
+    if !approved_url_location
+        && (production.contains("postgres://") || production.contains("postgresql://"))
+    {
+        violations.push(format!(
+            "production source `{relative}` contains a forbidden PostgreSQL URL literal"
+        ));
+    }
+
+    if is_sql {
+        let approved_migration_location = path
+            .starts_with(root.join("crates/platform-migrations/migrations"))
+            || path.starts_with(root.join("crates/cell-migrations/migrations"))
+            || path.starts_with(root.join("tools/postgres-qualification"));
+        if !approved_migration_location {
+            violations.push(format!(
+                "SQL file `{relative}` is outside an owned migration or qualification directory"
+            ));
+        }
+    }
+
+    if matches!(package, Some("platform-postgres" | "cell-postgres"))
+        && path
+            .components()
+            .any(|component| component.as_os_str() == "migrations")
+    {
+        violations.push(format!(
+            "runtime adapter source `{relative}` contains a migration file"
+        ));
+    }
+
+    if is_rust {
+        for (line_number, line) in production.lines().enumerate() {
+            let normalized = line.to_ascii_lowercase();
+            if normalized.contains("expose_secret")
+                && [
+                    "println!",
+                    "eprintln!",
+                    "format!",
+                    "tracing::",
+                    "debug!",
+                    "info!",
+                    "warn!",
+                    "error!",
+                ]
+                .iter()
+                .any(|marker| normalized.contains(marker))
+            {
+                violations.push(format!(
+                    "non-test source `{relative}` line {} formats or logs an exposed secret",
+                    line_number + 1
+                ));
+            }
+            if normalized.contains("as i64")
+                && (normalized.contains("assignmentepoch")
+                    || normalized.contains("assignment_epoch")
+                    || normalized.contains("u64")
+                    || production.contains("AssignmentEpoch"))
+            {
+                violations.push(format!(
+                    "non-test source `{relative}` line {} contains a lossy assignment-epoch/u64 cast",
+                    line_number + 1
+                ));
+            }
+        }
+    }
+
+    if path.starts_with(root.join("apps")) && is_rust {
+        for token in [
+            "sqlx::query(",
+            "sqlx::query_as",
+            "PgPool",
+            "PgConnection",
+            "sqlx::migrate::Migrator",
+        ] {
+            if production.contains(token) {
+                violations.push(format!(
+                    "application binary source `{relative}` invokes SQLx directly via `{token}`"
+                ));
+            }
+        }
+
+        if package != Some("db-migrator") {
+            for token in [
+                "CREATE TABLE",
+                "CREATE SCHEMA",
+                "ALTER TABLE",
+                "DROP TABLE",
+                "sqlx::migrate",
+                "platform_migrations",
+                "cell_migrations",
+            ] {
+                if production.contains(token) {
+                    violations.push(format!(
+                        "runtime binary source `{relative}` contains forbidden DDL or migration invocation `{token}`"
+                    ));
+                }
+            }
+        }
+    }
+
+    if is_rust
+        && package.is_some_and(|name| !rules.classes.postgres_provider.contains(name))
+        && public_api_contains_sqlx(production)
+    {
+        violations.push(format!(
+            "source `{relative}` exposes a SQLx type outside the PostgreSQL provider layer"
+        ));
+    }
+
+    violations
+}
+
+fn is_approved_test_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component.as_os_str().to_str(),
+            Some("tests" | "test-fixtures" | "fixtures")
+        )
+    }) || path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.ends_with("_test"))
+}
+
+fn package_name_from_path<'a>(root: &Path, path: &'a Path) -> Option<&'a str> {
+    let relative = path.strip_prefix(root).ok()?;
+    let mut components = relative.components();
+    let top_level = components.next()?.as_os_str().to_str()?;
+    if !matches!(top_level, "apps" | "crates" | "tools") {
+        return None;
+    }
+    components.next()?.as_os_str().to_str()
+}
+
+fn public_api_contains_sqlx(contents: &str) -> bool {
+    let sqlx_tokens = [
+        "sqlx::",
+        "PgPool",
+        "PgConnection",
+        "Transaction<'",
+        "Transaction<",
+        "sqlx::migrate::Migrator",
+        "PgRow",
+    ];
+    let lines = contents.lines().collect::<Vec<_>>();
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        let starts_public_api = trimmed.starts_with("pub fn ")
+            || trimmed.starts_with("pub async fn ")
+            || trimmed.starts_with("pub type ")
+            || trimmed.starts_with("pub trait ")
+            || trimmed.starts_with("pub struct ")
+            || trimmed.starts_with("pub enum ")
+            || trimmed.starts_with("pub use ")
+            || trimmed.starts_with("pub static ")
+            || trimmed.starts_with("pub const ")
+            || trimmed.starts_with("pub ");
+        if !starts_public_api {
+            continue;
+        }
+
+        let end = usize::min(index + 6, lines.len());
+        let signature = lines[index..end]
+            .iter()
+            .take_while(|candidate| !candidate.contains('{') && !candidate.contains(';'))
+            .copied()
+            .chain(std::iter::once(*line))
+            .collect::<Vec<_>>()
+            .join(" ");
+        if sqlx_tokens.iter().any(|token| signature.contains(token)) {
+            return true;
+        }
+    }
+    false
 }
 
 fn relative_display<'a>(root: &'a Path, path: &'a Path) -> String {
@@ -744,15 +1186,30 @@ struct SmokeCase<'a> {
     environment: &'a [(&'a str, &'a str)],
 }
 
+#[allow(clippy::too_many_lines)]
 fn smoke(root: &Path) -> Result<()> {
     let cases = [
         SmokeCase {
             package: "platform-api",
-            environment: &[("EDTECH__ENVIRONMENT", "dev")],
+            environment: &[
+                ("EDTECH__ENVIRONMENT", "dev"),
+                (
+                    "EDTECH__DATABASE__CREDENTIAL_REF",
+                    "file:/run/secrets/platform-api-database",
+                ),
+                ("EDTECH__DATABASE__TLS_MODE", "disable"),
+            ],
         },
         SmokeCase {
             package: "platform-worker",
-            environment: &[("EDTECH__ENVIRONMENT", "npr")],
+            environment: &[
+                ("EDTECH__ENVIRONMENT", "npr"),
+                (
+                    "EDTECH__DATABASE__CREDENTIAL_REF",
+                    "file:/run/secrets/platform-worker-database",
+                ),
+                ("EDTECH__DATABASE__TLS_MODE", "verify_full"),
+            ],
         },
         SmokeCase {
             package: "tenant-router",
@@ -763,6 +1220,11 @@ fn smoke(root: &Path) -> Result<()> {
             environment: &[
                 ("EDTECH__ENVIRONMENT", "dev"),
                 ("EDTECH__CELL_ID", "cell-001"),
+                (
+                    "EDTECH__DATABASE__CREDENTIAL_REF",
+                    "file:/run/secrets/cell-api-database",
+                ),
+                ("EDTECH__DATABASE__TLS_MODE", "disable"),
             ],
         },
         SmokeCase {
@@ -770,6 +1232,11 @@ fn smoke(root: &Path) -> Result<()> {
             environment: &[
                 ("EDTECH__ENVIRONMENT", "npr"),
                 ("EDTECH__CELL_ID", "cell-002"),
+                (
+                    "EDTECH__DATABASE__CREDENTIAL_REF",
+                    "file:/run/secrets/cell-worker-database",
+                ),
+                ("EDTECH__DATABASE__TLS_MODE", "verify_full"),
             ],
         },
         SmokeCase {
@@ -777,6 +1244,11 @@ fn smoke(root: &Path) -> Result<()> {
             environment: &[
                 ("EDTECH__ENVIRONMENT", "prd"),
                 ("EDTECH__MIGRATION_SCOPE", "platform"),
+                (
+                    "EDTECH__DATABASE__CREDENTIAL_REF",
+                    "file:/run/secrets/platform-migrator-database",
+                ),
+                ("EDTECH__DATABASE__TLS_MODE", "verify_full"),
             ],
         },
         SmokeCase {
@@ -785,6 +1257,11 @@ fn smoke(root: &Path) -> Result<()> {
                 ("EDTECH__ENVIRONMENT", "prd"),
                 ("EDTECH__MIGRATION_SCOPE", "cell"),
                 ("EDTECH__CELL_ID", "cell-001"),
+                (
+                    "EDTECH__DATABASE__CREDENTIAL_REF",
+                    "file:/run/secrets/cell-migrator-database",
+                ),
+                ("EDTECH__DATABASE__TLS_MODE", "verify_full"),
             ],
         },
     ];
@@ -829,11 +1306,11 @@ fn smoke(root: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::{collections::BTreeSet, path::Path};
 
     use super::{
         AllowedExternalDependency, AllowedWorkspaceEdge, DependencyRules, GraphDependency,
-        GraphPackage, RuleClasses, validate_graph,
+        GraphPackage, RuleClasses, source_violations, validate_graph,
     };
 
     fn set(values: &[&str]) -> BTreeSet<String> {
@@ -842,14 +1319,23 @@ mod tests {
 
     fn rules() -> DependencyRules {
         DependencyRules {
-            schema_version: 1,
+            schema_version: 2,
             classes: RuleClasses {
                 domain: set(&["tenancy-domain"]),
                 application: set(&["platform-application", "cell-application"]),
-                platform_binary: set(&["platform-api"]),
+                platform_binary: set(&["platform-api", "tenant-router"]),
                 cell_binary: set(&["cell-api"]),
-                deployable_binary: set(&["platform-api", "cell-api"]),
+                deployable_binary: set(&[
+                    "platform-api",
+                    "cell-api",
+                    "tenant-router",
+                    "db-migrator",
+                ]),
                 composition_support: BTreeSet::new(),
+                secret_adapter: set(&["secret-resolution"]),
+                postgres_provider: set(&["postgres-runtime", "platform-postgres", "cell-postgres"]),
+                migration_adapter: set(&["platform-migrations", "cell-migrations"]),
+                qualification_tool: set(&["postgres-qualification"]),
                 test_support: set(&["test-support"]),
                 tool: BTreeSet::new(),
             },
@@ -905,6 +1391,14 @@ mod tests {
         violations
             .iter()
             .any(|violation| violation.contains(fragment))
+    }
+
+    fn allow_workspace_edge(rules: &mut DependencyRules, from: &str, to: &str) {
+        rules.allowed_workspace_edges.push(AllowedWorkspaceEdge {
+            from: from.to_owned(),
+            to: to.to_owned(),
+            kinds: set(&["normal"]),
+        });
     }
 
     #[test]
@@ -978,5 +1472,135 @@ mod tests {
         }];
         let violations = validate_graph(&graph, &rules());
         assert!(has_violation(&violations, "forbidden generic crate name"));
+    }
+
+    #[test]
+    fn platform_binary_importing_cell_postgres_is_rejected() {
+        let mut rules = rules();
+        allow_workspace_edge(&mut rules, "platform-api", "cell-postgres");
+        let graph = [GraphPackage {
+            name: String::from("platform-api"),
+            dependencies: vec![workspace_dependency("cell-postgres")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "Platform binary"
+        ));
+    }
+
+    #[test]
+    fn cell_binary_importing_platform_postgres_is_rejected() {
+        let mut rules = rules();
+        allow_workspace_edge(&mut rules, "cell-api", "platform-postgres");
+        let graph = [GraphPackage {
+            name: String::from("cell-api"),
+            dependencies: vec![workspace_dependency("platform-postgres")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "Cell binary"
+        ));
+    }
+
+    #[test]
+    fn runtime_binary_importing_migrations_is_rejected() {
+        let mut rules = rules();
+        allow_workspace_edge(&mut rules, "platform-api", "platform-migrations");
+        let graph = [GraphPackage {
+            name: String::from("platform-api"),
+            dependencies: vec![workspace_dependency("platform-migrations")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "runtime binary"
+        ));
+    }
+
+    #[test]
+    fn tenant_router_importing_postgres_runtime_is_rejected() {
+        let mut rules = rules();
+        allow_workspace_edge(&mut rules, "tenant-router", "postgres-runtime");
+        let graph = [GraphPackage {
+            name: String::from("tenant-router"),
+            dependencies: vec![workspace_dependency("postgres-runtime")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "tenant-router"
+        ));
+    }
+
+    #[test]
+    fn deployable_importing_qualification_tool_is_rejected() {
+        let mut rules = rules();
+        allow_workspace_edge(&mut rules, "platform-api", "postgres-qualification");
+        let graph = [GraphPackage {
+            name: String::from("platform-api"),
+            dependencies: vec![workspace_dependency("postgres-qualification")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "qualification tool"
+        ));
+    }
+
+    #[test]
+    fn application_importing_secret_resolution_is_rejected() {
+        let mut rules = rules();
+        allow_workspace_edge(&mut rules, "cell-application", "secret-resolution");
+        let graph = [GraphPackage {
+            name: String::from("cell-application"),
+            dependencies: vec![workspace_dependency("secret-resolution")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "secret adapter"
+        ));
+    }
+
+    #[test]
+    fn deployable_binary_direct_sqlx_dependency_is_rejected() {
+        let mut rules = rules();
+        rules
+            .allowed_external_dependencies
+            .push(AllowedExternalDependency {
+                from: String::from("platform-api"),
+                dependency: String::from("sqlx"),
+                kinds: set(&["normal"]),
+            });
+        let graph = [GraphPackage {
+            name: String::from("platform-api"),
+            dependencies: vec![external_dependency("sqlx", "=0.9.0")],
+        }];
+        assert!(has_violation(
+            &validate_graph(&graph, &rules),
+            "outside the PostgreSQL provider"
+        ));
+    }
+
+    #[test]
+    fn lossy_assignment_epoch_cast_in_production_source_is_rejected() {
+        let root = Path::new("/workspace");
+        let path = root.join("crates/cell-postgres/src/lossy.rs");
+        let violations = source_violations(
+            root,
+            &path,
+            "pub fn lossy(epoch: AssignmentEpoch) { let value = epoch.get() as i64; }",
+            &rules(),
+        );
+        assert!(has_violation(&violations, "lossy assignment-epoch"));
+    }
+
+    #[test]
+    fn postgres_url_literal_in_production_source_is_rejected() {
+        let root = Path::new("/workspace");
+        let path = root.join("apps/platform-api/src/main.rs");
+        let violations = source_violations(
+            root,
+            &path,
+            "const CREDENTIAL: &str = \"postgres://example.invalid/database\";",
+            &rules(),
+        );
+        assert!(has_violation(&violations, "PostgreSQL URL literal"));
     }
 }

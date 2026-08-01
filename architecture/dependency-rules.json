@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "classes": {
     "domain": [
       "tenancy-domain",
@@ -33,20 +33,40 @@
       "runtime-config",
       "process-lifecycle"
     ],
+    "secret_adapter": [
+      "secret-resolution"
+    ],
+    "postgres_provider": [
+      "postgres-runtime",
+      "platform-postgres",
+      "cell-postgres"
+    ],
+    "migration_adapter": [
+      "platform-migrations",
+      "cell-migrations"
+    ],
+    "qualification_tool": [
+      "postgres-qualification"
+    ],
     "test_support": [
       "test-support"
     ],
     "tool": [
-      "xtask"
+      "xtask",
+      "postgres-qualification"
     ]
   },
   "forbidden_package_names": [
+    "database",
+    "persistence",
     "common",
     "shared",
     "core",
     "utils",
     "helpers",
-    "misc"
+    "misc",
+    "infrastructure",
+    "adapters"
   ],
   "allowed_workspace_edges": [
     { "from": "provisioning-domain", "to": "tenancy-domain", "kinds": ["normal"] },
@@ -66,28 +86,62 @@
     { "from": "routing-application", "to": "auth-context", "kinds": ["normal"] },
 
     { "from": "runtime-config", "to": "tenancy-domain", "kinds": ["normal"] },
+    { "from": "secret-resolution", "to": "runtime-config", "kinds": ["normal"] },
+    { "from": "platform-postgres", "to": "postgres-runtime", "kinds": ["normal"] },
+    { "from": "cell-postgres", "to": "postgres-runtime", "kinds": ["normal"] },
+    { "from": "cell-postgres", "to": "tenancy-domain", "kinds": ["normal"] },
+    { "from": "cell-postgres", "to": "cell-application", "kinds": ["normal"] },
+    { "from": "platform-migrations", "to": "postgres-runtime", "kinds": ["normal"] },
+    { "from": "cell-migrations", "to": "postgres-runtime", "kinds": ["normal"] },
+    { "from": "cell-migrations", "to": "tenancy-domain", "kinds": ["normal"] },
+
     { "from": "test-support", "to": "tenancy-domain", "kinds": ["normal"] },
     { "from": "test-support", "to": "provisioning-domain", "kinds": ["normal"] },
     { "from": "test-support", "to": "auth-context", "kinds": ["normal"] },
     { "from": "test-support", "to": "audit-domain", "kinds": ["normal"] },
 
     { "from": "platform-api", "to": "platform-application", "kinds": ["normal"] },
+    { "from": "platform-api", "to": "platform-postgres", "kinds": ["normal"] },
+    { "from": "platform-api", "to": "postgres-runtime", "kinds": ["normal"] },
+    { "from": "platform-api", "to": "secret-resolution", "kinds": ["normal"] },
     { "from": "platform-api", "to": "runtime-config", "kinds": ["normal"] },
     { "from": "platform-api", "to": "process-lifecycle", "kinds": ["normal"] },
     { "from": "platform-worker", "to": "platform-application", "kinds": ["normal"] },
+    { "from": "platform-worker", "to": "platform-postgres", "kinds": ["normal"] },
+    { "from": "platform-worker", "to": "postgres-runtime", "kinds": ["normal"] },
+    { "from": "platform-worker", "to": "secret-resolution", "kinds": ["normal"] },
     { "from": "platform-worker", "to": "runtime-config", "kinds": ["normal"] },
     { "from": "platform-worker", "to": "process-lifecycle", "kinds": ["normal"] },
     { "from": "tenant-router", "to": "routing-application", "kinds": ["normal"] },
     { "from": "tenant-router", "to": "runtime-config", "kinds": ["normal"] },
     { "from": "tenant-router", "to": "process-lifecycle", "kinds": ["normal"] },
     { "from": "cell-api", "to": "cell-application", "kinds": ["normal"] },
+    { "from": "cell-api", "to": "cell-postgres", "kinds": ["normal"] },
+    { "from": "cell-api", "to": "postgres-runtime", "kinds": ["normal"] },
+    { "from": "cell-api", "to": "secret-resolution", "kinds": ["normal"] },
     { "from": "cell-api", "to": "runtime-config", "kinds": ["normal"] },
     { "from": "cell-api", "to": "process-lifecycle", "kinds": ["normal"] },
     { "from": "cell-worker", "to": "cell-application", "kinds": ["normal"] },
+    { "from": "cell-worker", "to": "cell-postgres", "kinds": ["normal"] },
+    { "from": "cell-worker", "to": "postgres-runtime", "kinds": ["normal"] },
+    { "from": "cell-worker", "to": "secret-resolution", "kinds": ["normal"] },
     { "from": "cell-worker", "to": "runtime-config", "kinds": ["normal"] },
     { "from": "cell-worker", "to": "process-lifecycle", "kinds": ["normal"] },
+    { "from": "db-migrator", "to": "platform-migrations", "kinds": ["normal"] },
+    { "from": "db-migrator", "to": "cell-migrations", "kinds": ["normal"] },
+    { "from": "db-migrator", "to": "postgres-runtime", "kinds": ["normal"] },
+    { "from": "db-migrator", "to": "secret-resolution", "kinds": ["normal"] },
     { "from": "db-migrator", "to": "runtime-config", "kinds": ["normal"] },
-    { "from": "db-migrator", "to": "process-lifecycle", "kinds": ["normal"] },
+
+    { "from": "postgres-qualification", "to": "tenancy-domain", "kinds": ["normal"] },
+    { "from": "postgres-qualification", "to": "cell-application", "kinds": ["normal"] },
+    { "from": "postgres-qualification", "to": "postgres-runtime", "kinds": ["normal"] },
+    { "from": "postgres-qualification", "to": "platform-postgres", "kinds": ["normal"] },
+    { "from": "postgres-qualification", "to": "cell-postgres", "kinds": ["normal"] },
+    { "from": "postgres-qualification", "to": "platform-migrations", "kinds": ["normal"] },
+    { "from": "postgres-qualification", "to": "cell-migrations", "kinds": ["normal"] },
+    { "from": "postgres-qualification", "to": "secret-resolution", "kinds": ["normal"] },
+    { "from": "postgres-qualification", "to": "test-support", "kinds": ["normal"] },
 
     { "from": "tenancy-domain", "to": "test-support", "kinds": ["dev"] },
     { "from": "provisioning-domain", "to": "test-support", "kinds": ["dev"] },
@@ -115,6 +169,7 @@
     { "from": "auth-context", "dependency": "uuid", "kinds": ["normal"] },
     { "from": "audit-domain", "dependency": "thiserror", "kinds": ["normal"] },
     { "from": "audit-domain", "dependency": "uuid", "kinds": ["normal"] },
+    { "from": "cell-application", "dependency": "thiserror", "kinds": ["normal"] },
 
     { "from": "runtime-config", "dependency": "config", "kinds": ["normal"] },
     { "from": "runtime-config", "dependency": "serde", "kinds": ["normal"] },
@@ -123,6 +178,29 @@
     { "from": "process-lifecycle", "dependency": "tokio", "kinds": ["normal"] },
     { "from": "process-lifecycle", "dependency": "tokio-util", "kinds": ["normal"] },
     { "from": "process-lifecycle", "dependency": "tracing", "kinds": ["normal"] },
+    { "from": "secret-resolution", "dependency": "secrecy", "kinds": ["normal"] },
+    { "from": "secret-resolution", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "secret-resolution", "dependency": "tempfile", "kinds": ["dev"] },
+
+    { "from": "postgres-runtime", "dependency": "sqlx", "kinds": ["normal"] },
+    { "from": "postgres-runtime", "dependency": "secrecy", "kinds": ["normal"] },
+    { "from": "postgres-runtime", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "postgres-runtime", "dependency": "tracing", "kinds": ["normal"] },
+    { "from": "platform-postgres", "dependency": "sqlx", "kinds": ["normal"] },
+    { "from": "platform-postgres", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "platform-postgres", "dependency": "tracing", "kinds": ["normal"] },
+    { "from": "cell-postgres", "dependency": "sqlx", "kinds": ["normal"] },
+    { "from": "cell-postgres", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "cell-postgres", "dependency": "tracing", "kinds": ["normal"] },
+    { "from": "cell-postgres", "dependency": "uuid", "kinds": ["normal"] },
+    { "from": "platform-migrations", "dependency": "sqlx", "kinds": ["normal"] },
+    { "from": "platform-migrations", "dependency": "secrecy", "kinds": ["normal"] },
+    { "from": "platform-migrations", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "platform-migrations", "dependency": "tracing", "kinds": ["normal"] },
+    { "from": "cell-migrations", "dependency": "sqlx", "kinds": ["normal"] },
+    { "from": "cell-migrations", "dependency": "secrecy", "kinds": ["normal"] },
+    { "from": "cell-migrations", "dependency": "thiserror", "kinds": ["normal"] },
+    { "from": "cell-migrations", "dependency": "tracing", "kinds": ["normal"] },
 
     { "from": "platform-api", "dependency": "anyhow", "kinds": ["normal"] },
     { "from": "platform-api", "dependency": "tokio", "kinds": ["normal"] },
@@ -149,8 +227,16 @@
     { "from": "db-migrator", "dependency": "tracing", "kinds": ["normal"] },
     { "from": "db-migrator", "dependency": "tracing-subscriber", "kinds": ["normal"] },
 
+    { "from": "postgres-qualification", "dependency": "anyhow", "kinds": ["normal"] },
+    { "from": "postgres-qualification", "dependency": "secrecy", "kinds": ["normal"] },
+    { "from": "postgres-qualification", "dependency": "serde", "kinds": ["normal"] },
+    { "from": "postgres-qualification", "dependency": "serde_json", "kinds": ["normal"] },
+    { "from": "postgres-qualification", "dependency": "sqlx", "kinds": ["normal"] },
+    { "from": "postgres-qualification", "dependency": "tokio", "kinds": ["normal"] },
+
     { "from": "xtask", "dependency": "anyhow", "kinds": ["normal"] },
     { "from": "xtask", "dependency": "clap", "kinds": ["normal"] },
+    { "from": "xtask", "dependency": "getrandom", "kinds": ["normal"] },
     { "from": "xtask", "dependency": "serde", "kinds": ["normal"] },
     { "from": "xtask", "dependency": "serde_json", "kinds": ["normal"] }
   ]

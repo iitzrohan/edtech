@@ -12,6 +12,12 @@ Before handing off a change, run the canonical full check:
 cargo xtask verify
 ```
 
+Database, migration, role, policy, or tenant-table changes also require:
+
+```console
+cargo xtask verify-postgres --profile ci
+```
+
 ## Where code belongs
 
 - Domain invariants and provider-neutral value types belong in the narrowly named domain crate that
@@ -53,3 +59,21 @@ do not weaken a layer rule merely to make a new edge pass.
 Tests should protect durable behavior or material failure risk at the lowest useful level. Extend the
 closest existing test when it already owns the contract, and do not add tests whose only purpose is
 to prove removed implementation remains absent.
+
+## PostgreSQL migrations and tenant tables
+
+- Platform SQL belongs only in `crates/platform-migrations/migrations`; Cell SQL belongs only in
+  `crates/cell-migrations/migrations`.
+- Add a monotonically numbered forward `.sql` file. Never edit a migration after it has been
+  applied or merged, and do not add a down migration in this checkpoint.
+- Runtime adapters and API/worker binaries must contain no DDL or migration invocation. Only
+  `db-migrator` and the non-deployable qualification tool may import migration crates.
+- Fully qualify every application object. Do not create application objects in `public`.
+- Update a schema-contract version only as an intentional compatibility decision, with matching
+  adapter support and qualification evidence.
+- Every tenant-owned product table belongs in `tenant_data` and must have a non-null UUIDv7
+  `tenant_id`, forced RLS, an applicable `USING` and `WITH CHECK` policy, and no PUBLIC privilege.
+  Every primary/unique key and every inbound/outbound tenant foreign key must include `tenant_id`.
+  A runtime role must not own the table or have schema CREATE/DDL capability.
+- Run `cargo xtask verify-postgres --profile ci` after every database change; the catalog inspector
+  rejects unsafe tables, indexes, constraints, policies, owners, and privileges.

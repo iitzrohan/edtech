@@ -1,0 +1,404 @@
+{
+  "schema_version": 1,
+  "checkpoint": "02-postgresql-authority-and-tenancy",
+  "profile": "full",
+  "parameters": {
+    "tenants": 500,
+    "logical_tables": 20,
+    "secondary_indexes_per_table": 2,
+    "rows_per_tenant": 50,
+    "alternating_switches": 10000,
+    "concurrency": 32
+  },
+  "versions": {
+    "postgres_server_version_num": 180004,
+    "postgres_image": "postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+    "rust": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "sqlx": "0.9.0"
+  },
+  "host": {
+    "operating_system": "macos",
+    "architecture": "aarch64",
+    "available_parallelism": 10
+  },
+  "correctness": {
+    "passed": 82,
+    "failed": 0,
+    "checks": [
+      {
+        "name": "migration.platform.clean_and_repeat_idempotent",
+        "passed": true
+      },
+      {
+        "name": "migration.cell.clean_and_repeat_idempotent",
+        "passed": true
+      },
+      {
+        "name": "migration.platform.concurrent_migrators_serialize",
+        "passed": true
+      },
+      {
+        "name": "migration.cell.concurrent_migrators_serialize",
+        "passed": true
+      },
+      {
+        "name": "migration.platform_rejects_cell_authority_before_ddl",
+        "passed": true
+      },
+      {
+        "name": "migration.cell_rejects_platform_authority_before_ddl",
+        "passed": true
+      },
+      {
+        "name": "migration.cell_rejects_wrong_cell_identity",
+        "passed": true
+      },
+      {
+        "name": "migration.platform_runtime_credential_cannot_migrate",
+        "passed": true
+      },
+      {
+        "name": "migration.cell_runtime_credential_cannot_migrate",
+        "passed": true
+      },
+      {
+        "name": "authority.platform_migrator_rejected_by_runtime_adapter",
+        "passed": true
+      },
+      {
+        "name": "authority.cell_migrator_rejected_by_runtime_adapter",
+        "passed": true
+      },
+      {
+        "name": "authority.platform_runtime_roles_ready",
+        "passed": true
+      },
+      {
+        "name": "authority.cell_runtime_roles_ready",
+        "passed": true
+      },
+      {
+        "name": "migration.wrong_authority_attempts_leave_no_application_objects",
+        "passed": true
+      },
+      {
+        "name": "authority.marker_is_immutable_to_migration_and_runtime_roles",
+        "passed": true
+      },
+      {
+        "name": "migration.runtime_roles_cannot_read_history",
+        "passed": true
+      },
+      {
+        "name": "migration.runtime_roles_cannot_create_in_history_schema",
+        "passed": true
+      },
+      {
+        "name": "migration.runtime_roles_cannot_modify_schema_contract",
+        "passed": true
+      },
+      {
+        "name": "migration.platform_history_only_in_owned_schema",
+        "passed": true
+      },
+      {
+        "name": "migration.platform_schema_contract_visible",
+        "passed": true
+      },
+      {
+        "name": "migration.platform_has_no_public_application_objects",
+        "passed": true
+      },
+      {
+        "name": "migration.cell_history_only_in_owned_schema",
+        "passed": true
+      },
+      {
+        "name": "migration.cell_schema_contract_visible",
+        "passed": true
+      },
+      {
+        "name": "migration.cell_has_no_public_application_objects",
+        "passed": true
+      },
+      {
+        "name": "authority.role_sets_are_physically_separate",
+        "passed": true
+      },
+      {
+        "name": "migration.failed_transaction_leaves_no_partial_object",
+        "passed": true
+      },
+      {
+        "name": "rls.01_tenant_a_inserts_and_reads_own_canary",
+        "passed": true
+      },
+      {
+        "name": "rls.02_tenant_b_cannot_read_tenant_a",
+        "passed": true
+      },
+      {
+        "name": "rls.03_tenant_b_cannot_update_tenant_a",
+        "passed": true
+      },
+      {
+        "name": "rls.04_tenant_b_cannot_delete_tenant_a",
+        "passed": true
+      },
+      {
+        "name": "rls.05_tenant_a_cannot_insert_tenant_b_row",
+        "passed": true
+      },
+      {
+        "name": "rls.06_tenant_a_cannot_move_row_to_tenant_b",
+        "passed": true
+      },
+      {
+        "name": "rls.07_query_without_context_returns_no_rows",
+        "passed": true
+      },
+      {
+        "name": "rls.08_write_without_context_is_rejected",
+        "passed": true
+      },
+      {
+        "name": "rls.09_nonexistent_tenant_is_rejected",
+        "passed": true
+      },
+      {
+        "name": "rls.10_disabled_tenant_is_rejected",
+        "passed": true
+      },
+      {
+        "name": "rls.11_stale_assignment_epoch_is_rejected",
+        "passed": true
+      },
+      {
+        "name": "rls.12_newer_unregistered_epoch_is_rejected",
+        "passed": true
+      },
+      {
+        "name": "rls.13_wrong_cell_is_rejected_before_data_access",
+        "passed": true
+      },
+      {
+        "name": "rls.14_commit_then_connection_reuse_leaks_no_rows",
+        "passed": true
+      },
+      {
+        "name": "rls.15_rollback_then_connection_reuse_leaks_no_context",
+        "passed": true
+      },
+      {
+        "name": "rls.16_alternate_1000_times_on_one_connection",
+        "passed": true
+      },
+      {
+        "name": "rls.17_sqlx_prepared_query_reused_across_tenants",
+        "passed": true
+      },
+      {
+        "name": "rls.18_concurrent_32_tenants_have_no_leakage",
+        "passed": true
+      },
+      {
+        "name": "rls.19_row_security_off_does_not_bypass",
+        "passed": true
+      },
+      {
+        "name": "rls.20_runtime_cannot_disable_rls",
+        "passed": true
+      },
+      {
+        "name": "rls.21_runtime_cannot_drop_policy",
+        "passed": true
+      },
+      {
+        "name": "rls.22_runtime_cannot_create_policy",
+        "passed": true
+      },
+      {
+        "name": "rls.23_runtime_cannot_set_role_to_migrator",
+        "passed": true
+      },
+      {
+        "name": "rls.24_runtime_role_is_not_table_owner",
+        "passed": true
+      },
+      {
+        "name": "rls.25_runtime_role_has_no_bypassrls",
+        "passed": true
+      },
+      {
+        "name": "rls.26_table_has_rls_enabled",
+        "passed": true
+      },
+      {
+        "name": "rls.27_table_has_rls_forced",
+        "passed": true
+      },
+      {
+        "name": "rls.28_policy_has_using_and_with_check",
+        "passed": true
+      },
+      {
+        "name": "rls.29_public_has_no_table_privilege",
+        "passed": true
+      },
+      {
+        "name": "rls.30_transaction_local_setting_disappears_after_commit",
+        "passed": true
+      },
+      {
+        "name": "rls.31_transaction_local_setting_disappears_after_rollback",
+        "passed": true
+      },
+      {
+        "name": "rls.32_u64_max_epoch_stores_authorizes_and_compares",
+        "passed": true
+      },
+      {
+        "name": "rls.33_epoch_above_signed_max_is_lossless",
+        "passed": true
+      },
+      {
+        "name": "rls.34_zero_epoch_cannot_be_stored",
+        "passed": true
+      },
+      {
+        "name": "rls.35_secret_values_absent_from_failure_output",
+        "passed": true
+      },
+      {
+        "name": "rls.profile_concurrent_isolation",
+        "passed": true
+      },
+      {
+        "name": "schema_inspector.selected_tenant_data_passes",
+        "passed": true
+      },
+      {
+        "name": "schema_inspector.synthetic_major_rule_violations_are_rejected",
+        "passed": true
+      },
+      {
+        "name": "schema_candidate.01_tenant_a_cannot_read_tenant_b",
+        "passed": true
+      },
+      {
+        "name": "schema_candidate.02_tenant_b_cannot_read_tenant_a",
+        "passed": true
+      },
+      {
+        "name": "schema_candidate.03_missing_scope_fails_closed",
+        "passed": true
+      },
+      {
+        "name": "schema_candidate.04_schema_names_are_opaque",
+        "passed": true
+      },
+      {
+        "name": "schema_candidate.05_invalid_identifier_input_is_rejected",
+        "passed": true
+      },
+      {
+        "name": "schema_candidate.06_prepared_statement_reuse_leaks_no_data",
+        "passed": true
+      },
+      {
+        "name": "schema_candidate.07_alternate_1000_times_on_one_connection",
+        "passed": true
+      },
+      {
+        "name": "schema_candidate.08_unrelated_same_named_object_cannot_redirect",
+        "passed": true
+      },
+      {
+        "name": "schema_candidate.09_runtime_cannot_create_schemas",
+        "passed": true
+      },
+      {
+        "name": "schema_candidate.10_runtime_cannot_create_tables",
+        "passed": true
+      },
+      {
+        "name": "schema_candidate.11_runtime_cannot_change_another_tenant_schema",
+        "passed": true
+      },
+      {
+        "name": "schema_candidate.12_role_default_probe_cannot_enter_effective_tenant_path",
+        "passed": true
+      },
+      {
+        "name": "schema_candidate.13_runtime_cannot_set_role_to_migrator",
+        "passed": true
+      },
+      {
+        "name": "schema_candidate.14_migration_history_is_complete_and_measurable",
+        "passed": true
+      },
+      {
+        "name": "schema_candidate.15_interrupted_migration_is_detected",
+        "passed": true
+      },
+      {
+        "name": "schema_candidate.16_schema_switch_survives_neither_commit_nor_rollback",
+        "passed": true
+      },
+      {
+        "name": "schema_candidate.search_path_starts_catalog_and_excludes_public_user",
+        "passed": true
+      },
+      {
+        "name": "schema_candidate.profile_concurrent_isolation",
+        "passed": true
+      }
+    ]
+  },
+  "shared_rls": {
+    "clean_candidate_creation_ms": 2,
+    "initial_schema_migration_ms": 11,
+    "incremental_migration_ms": 9,
+    "tenant_provisioning_ms": 270,
+    "total_schema_count": 1,
+    "total_table_count": 20,
+    "total_index_count": 61,
+    "relevant_pg_class_rows": 81,
+    "relevant_pg_attribute_rows": 243,
+    "database_size_bytes": 15316671,
+    "insert_rows_per_second": 27827,
+    "read_rows_per_second": 934,
+    "tenant_switch_p50_microseconds": 53404,
+    "tenant_switch_p95_microseconds": 58042,
+    "tenant_switch_p99_microseconds": 67128,
+    "prepared_query_alternation_passed": true,
+    "concurrent_isolation_passed": true,
+    "single_tenant_probe_export_microseconds": 61303,
+    "single_tenant_probe_import_microseconds": 18473,
+    "cleanup_ms": 7
+  },
+  "schema_per_tenant": {
+    "clean_candidate_creation_ms": 1,
+    "initial_schema_migration_ms": 5637,
+    "incremental_migration_ms": 1150,
+    "tenant_provisioning_ms": 761,
+    "total_schema_count": 500,
+    "total_table_count": 10000,
+    "total_index_count": 30500,
+    "relevant_pg_class_rows": 40500,
+    "relevant_pg_attribute_rows": 80500,
+    "database_size_bytes": 486815423,
+    "insert_rows_per_second": 27186,
+    "read_rows_per_second": 43784,
+    "tenant_switch_p50_microseconds": 1143,
+    "tenant_switch_p95_microseconds": 1649,
+    "tenant_switch_p99_microseconds": 2728,
+    "prepared_query_alternation_passed": true,
+    "concurrent_isolation_passed": true,
+    "single_tenant_probe_export_microseconds": 2317,
+    "single_tenant_probe_import_microseconds": 15846,
+    "cleanup_ms": 2968
+  },
+  "selected_model": "shared_tables_with_tenant_id_and_forced_rls",
+  "timing_limitations": "Wall-clock measurements are machine-dependent evidence and are not pass thresholds."
+}

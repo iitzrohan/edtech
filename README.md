@@ -1,92 +1,90 @@
-# EdTech platform foundation
+# EdTech PostgreSQL foundation
 
-This repository is the Checkpoint 1 Rust foundation for a future multi-tenant, event-driven EdTech
-platform. It compiles and tests without a database, broker, identity provider, cache, container
-runtime, or cloud credentials.
+This repository contains the Checkpoint 2 Rust/PostgreSQL foundation for a future multi-tenant,
+event-driven EdTech platform. It preserves the Checkpoint 1 domain, application, composition, and
+toolchain boundaries while adding separately privileged Platform and Cell PostgreSQL authorities.
 
-## Platform and Cell model
+## Platform and Cell authority
 
-Each isolated `dev`, `npr`, or `prd` environment will contain one Platform control plane and one or
-more logical Cells. The Platform owns organizations, tenant lifecycle, the logical Cell registry,
-tenant placement, provisioning operations, routing intent, and provider administration. A Cell
-owns its tenant projection, tenant-serving authorization and data, local jobs, readiness, and
-serving availability. A Cell contains many tenants, while a tenant has exactly one active logical
-Cell assignment at a time.
+Each `dev`, `npr`, or `prd` environment has one Platform control plane and one or more logical
+Cells. The Platform owns future organization, tenant-lifecycle, placement, routing-intent, and
+provisioning authority. A Cell owns its local tenant projection, serving authorization, tenant
+application data, jobs, readiness, and availability.
 
-Platform and Cell are separate database authorities. Platform processes must never receive Cell
-database credentials or query Cell databases; Cell processes must never query the Platform
-database. Active tenant requests therefore cannot synchronously call the Platform. A Cell must
-eventually be able to serve already-active tenants during a Platform outage, using Cell-authority
-state delivered asynchronously in later checkpoints.
+Platform and Cell use physically separate PostgreSQL clusters locally. Platform processes receive
+only Platform credentials; Cell processes receive only credentials for their configured Cell.
+`tenant-router` receives no database credential. Migrations run only through the one-shot
+`db-migrator` with a distinct authority-specific credential.
 
-`cell_id` is a stable logical name such as `cell-001`. It is deliberately topology-neutral: it
-must not encode a cluster, namespace, region, host, address, or provider coordinate. Deployment
-topology can change without changing identity or invalidating tenant assignment history.
+The selected tenant-storage baseline is shared tables with a `tenant_id` and forced PostgreSQL row
+level security. Tenant identity and the complete non-zero `u64` assignment epoch are applied with
+transaction-local settings, then checked against Cell-local tenant authority. Every production
+tenant table belongs in `tenant_data` and is inspected by the real-PostgreSQL schema linter.
+
+RLS protects against missing predicates and many accidental access errors. It does not protect
+against a completely compromised Cell runtime, because that runtime necessarily has the capability
+to serve multiple tenants. A future dedicated-Cell tier can provide a stronger isolation boundary.
 
 ## Dependency direction
 
 Dependencies point inward:
 
 ```text
-composition roots -> runtime/adapters -> application use cases and owned ports -> domain
+composition roots -> secret/database adapters -> application boundaries -> domain
 ```
 
-Domain and application crates contain no runtime framework or provider types. Application crates
-never depend on one another. The permitted workspace edges and direct external dependencies are
-machine-readable in `architecture/dependency-rules.json` and enforced by
+Runtime binaries do not import SQLx or migration crates. Platform binaries cannot import Cell
+adapters, Cell binaries cannot import Platform adapters, and migration SQL exists only in the two
+migration crates. The permitted edges and source constraints are machine-enforced by
 `cargo xtask verify-architecture`.
 
 ## Local commands
 
-The repository pins Rust 1.97.1, rustfmt, and Clippy through `rust-toolchain.toml`.
+The repository pins Rust 1.97.1, SQLx 0.9.0, and PostgreSQL 18.4.
 
 ```console
 cargo xtask doctor
-cargo xtask verify-architecture
-cargo xtask smoke
 cargo xtask verify
+cargo xtask doctor-postgres
+cargo xtask postgres-up
+cargo xtask migrate-local
+cargo xtask verify-postgres --profile ci
+cargo xtask qualify-tenancy --profile full --output docs/evidence/checkpoint-02 --replace
+cargo xtask postgres-down
+cargo xtask verify-all
 ```
 
-The full `verify` command runs doctor, formatting, locked workspace check, Clippy with all warnings
-denied, locked tests, architecture verification, and configuration smoke checks in deterministic
-order.
+`postgres-up` generates disposable passwords and URL secret files beneath
+`target/local-postgres/edtech-local/`, binds both services only to loopback, and prints only safe
+ports and file references. `postgres-down` removes the containers, volumes, and generated files.
+Automated verification uses unique project names, available loopback ports, and unconditional
+cleanup.
 
-## Startup configuration
+## Runtime configuration
 
-Environment selection is required runtime data; it is not a Cargo feature and has no implicit
-default:
+Database-enabled processes require an opaque absolute file reference; ordinary configuration never
+accepts a plaintext password or URL. For example:
 
 ```console
-EDTECH__ENVIRONMENT=dev cargo run --locked -p platform-api -- --check-config
-EDTECH__ENVIRONMENT=npr EDTECH__CELL_ID=cell-001 \
-  cargo run --locked -p cell-api -- --check-config
-EDTECH__ENVIRONMENT=prd EDTECH__MIGRATION_SCOPE=platform \
-  cargo run --locked -p db-migrator -- --check-config
-EDTECH__ENVIRONMENT=prd EDTECH__MIGRATION_SCOPE=cell EDTECH__CELL_ID=cell-001 \
-  cargo run --locked -p db-migrator -- --check-config
+EDTECH__ENVIRONMENT=dev \
+EDTECH__DATABASE__TLS_MODE=disable \
+EDTECH__DATABASE__CREDENTIAL_REF=file:/absolute/path/to/platform-api-url \
+cargo run --locked -p platform-api -- --check-database
 ```
 
-An optional TOML file can provide lower-precedence non-secret settings:
+Cell processes additionally require `EDTECH__CELL_ID=cell-001`. `npr` and `prd` require
+`verify_full` TLS. Unknown, raw-password, unexpected migration, and router database fields fail
+closed. `--check-config` does not resolve a secret or connect; `--check-database` resolves once and
+performs bounded server, role, authority-marker, and schema-contract checks.
 
-```toml
-log_filter = "info"
-shutdown_grace_ms = 30000
-```
+## Current claims and limitations
 
-Select it with `EDTECH_CONFIG_FILE=/path/to/runtime.toml`. Variables beginning with `EDTECH__`
-override the file and use double underscores as the nesting separator. Unknown keys fail. Ordinary
-configuration does not accept plaintext secrets; future integrations must use validated,
-debug-redacted secret references.
+Checkpoint 2 proves the behavior recorded in
+`docs/checkpoints/02-postgresql-authority-and-tenancy.md` and the generated qualification evidence.
+It covers local physical authority separation, PostgreSQL 18.4 and SQLx 0.9.0 compatibility,
+credential/role separation, migration behavior, forced-RLS isolation, exact assignment fencing,
+pool/prepared-query reuse, and current tenant-schema inspection.
 
-## Current limitations
-
-Checkpoint 1 proves repository/toolchain reproducibility, static dependency boundaries, typed
-startup configuration, process cancellation and supervision, and compile/test/CI readiness without
-external services. It does not prove tenant database isolation, runtime Platform/Cell credential
-isolation, event delivery, outbox/inbox correctness, provisioning recovery, routing correctness,
-tenant serving during a Platform outage, provider portability, high availability, disaster
-recovery, security certification, or production readiness.
-
-There is no PostgreSQL, SQLx, migration, HTTP API, broker adapter, identity integration, cache,
-Terraform, Kubernetes, container definition, or EdTech product feature here. In particular, this
-checkpoint does not choose schema-per-tenant versus shared tables with `tenant_id` and RLS.
+It does not establish cloud network isolation, Kubernetes secret delivery, production hardening,
+availability, backup/restore, disaster recovery, event delivery, provisioning, routing, identity,
+product correctness, provider portability, or production readiness.

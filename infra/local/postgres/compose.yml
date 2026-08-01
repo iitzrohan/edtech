@@ -1,0 +1,54 @@
+services:
+  platform-postgres:
+    # Tag: PostgreSQL 18.4 on Debian Bookworm; digest: pinned multi-platform index.
+    image: postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296
+    environment:
+      POSTGRES_DB: edtech_platform
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=trust
+      POSTGRES_PASSWORD_FILE: /run/edtech-secrets/bootstrap-password
+      POSTGRES_USER: edtech_platform_bootstrap
+    ports:
+      - "127.0.0.1:${EDTECH_PLATFORM_POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - platform-postgres-data:/var/lib/postgresql
+      - ./platform/init/001-bootstrap.sh:/docker-entrypoint-initdb.d/001-bootstrap.sh:ro
+      - ${EDTECH_POSTGRES_SECRET_DIR:?secret directory required}/platform-bootstrap-password:/run/edtech-secrets/bootstrap-password:ro
+      - ${EDTECH_POSTGRES_SECRET_DIR:?secret directory required}/platform-migrator-password:/run/edtech-secrets/migrator-password:ro
+      - ${EDTECH_POSTGRES_SECRET_DIR:?secret directory required}/platform-api-password:/run/edtech-secrets/api-password:ro
+      - ${EDTECH_POSTGRES_SECRET_DIR:?secret directory required}/platform-worker-password:/run/edtech-secrets/worker-password:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edtech_platform_bootstrap -d edtech_platform -q"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    stop_grace_period: 10s
+
+  cell-postgres:
+    # Tag: PostgreSQL 18.4 on Debian Bookworm; digest: pinned multi-platform index.
+    image: postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296
+    environment:
+      POSTGRES_DB: edtech_cell
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=trust
+      POSTGRES_PASSWORD_FILE: /run/edtech-secrets/bootstrap-password
+      POSTGRES_USER: edtech_cell_bootstrap
+    ports:
+      - "127.0.0.1:${EDTECH_CELL_POSTGRES_PORT:-55433}:5432"
+    volumes:
+      - cell-postgres-data:/var/lib/postgresql
+      - ./cell/init/001-bootstrap.sh:/docker-entrypoint-initdb.d/001-bootstrap.sh:ro
+      - ${EDTECH_POSTGRES_SECRET_DIR:?secret directory required}/cell-bootstrap-password:/run/edtech-secrets/bootstrap-password:ro
+      - ${EDTECH_POSTGRES_SECRET_DIR:?secret directory required}/cell-migrator-password:/run/edtech-secrets/migrator-password:ro
+      - ${EDTECH_POSTGRES_SECRET_DIR:?secret directory required}/cell-api-password:/run/edtech-secrets/api-password:ro
+      - ${EDTECH_POSTGRES_SECRET_DIR:?secret directory required}/cell-worker-password:/run/edtech-secrets/worker-password:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edtech_cell_bootstrap -d edtech_cell -q"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    stop_grace_period: 10s
+
+volumes:
+  platform-postgres-data:
+  cell-postgres-data:

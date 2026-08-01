@@ -39,6 +39,12 @@ macro_rules! uuid_v7_identifier {
                     Err(UuidV7Error::WrongVersion)
                 }
             }
+
+            /// Borrows the validated UUID value without allocation.
+            #[must_use]
+            pub const fn as_uuid(&self) -> &Uuid {
+                &self.0
+            }
         }
 
         impl FromStr for $name {
@@ -242,6 +248,24 @@ mod tests {
             OrganizationId::from_str("not-a-uuid"),
             Err(UuidV7Error::InvalidUuid(_))
         ));
+    }
+
+    #[test]
+    fn uuid_identifiers_expose_the_validated_uuid_without_allocation() {
+        let organization = OrganizationId::from_str(VALID_UUID_V7);
+        let tenant = TenantId::from_str(VALID_UUID_V7);
+
+        assert_eq!(
+            organization.as_ref().ok().map(OrganizationId::as_uuid),
+            tenant.as_ref().ok().map(TenantId::as_uuid)
+        );
+        assert_eq!(
+            tenant
+                .as_ref()
+                .ok()
+                .map(|value| value.as_uuid().to_string()),
+            Some(String::from(VALID_UUID_V7))
+        );
     }
 
     #[test]
